@@ -1,0 +1,13 @@
+[project]
+name = "copilot-hooks"
+version = "0.1.0"
+description = "Personal GitHub Copilot hook scripts for local safety and repo hygiene."
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100

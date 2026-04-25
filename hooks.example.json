@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "type": "command",
+        "command": "python run_hook.py scripts\\pre_tool_security.py",
+        "powershell": "& 'python.exe' 'run_hook.py' 'scripts\\pre_tool_security.py'",
+        "cwd": ".",
+        "timeout": 30
+      },
+      {
+        "type": "command",
+        "command": "python run_hook.py scripts\\pre_tool_dangerous_commands.py",
+        "powershell": "& 'python.exe' 'run_hook.py' 'scripts\\pre_tool_dangerous_commands.py'",
+        "cwd": ".",
+        "timeout": 30
+      }
+    ],
+    "PostToolUse": [
+      {
+        "type": "command",
+        "command": "python run_hook.py scripts\\post_tool_cleaner.py",
+        "powershell": "& 'python.exe' 'run_hook.py' 'scripts\\post_tool_cleaner.py'",
+        "cwd": ".",
+        "timeout": 30
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "python run_hook.py scripts\\session_stop.py",
+        "powershell": "& 'python.exe' 'run_hook.py' 'scripts\\session_stop.py'",
+        "cwd": ".",
+        "timeout": 120
+      }
+    ]
+  }
+}
