@@ -4,15 +4,15 @@
     "PreToolUse": [
       {
         "type": "command",
-        "command": "python run_hook.py scripts\\pre_tool_security.py",
-        "powershell": "& 'python.exe' 'run_hook.py' 'scripts\\pre_tool_security.py'",
+        "command": "python \"%USERPROFILE%\\.copilot\\hooks\\run_hook.py\" \"%USERPROFILE%\\.copilot\\hooks\\scripts\\pre_tool_security.py\"",
+        "powershell": "& 'python.exe' \"$env:USERPROFILE\\.copilot\\hooks\\run_hook.py\" \"$env:USERPROFILE\\.copilot\\hooks\\scripts\\pre_tool_security.py\"",
         "cwd": ".",
         "timeout": 30
       },
       {
         "type": "command",
-        "command": "python run_hook.py scripts\\pre_tool_dangerous_commands.py",
-        "powershell": "& 'python.exe' 'run_hook.py' 'scripts\\pre_tool_dangerous_commands.py'",
+        "command": "python \"%USERPROFILE%\\.copilot\\hooks\\run_hook.py\" \"%USERPROFILE%\\.copilot\\hooks\\scripts\\pre_tool_dangerous_commands.py\"",
+        "powershell": "& 'python.exe' \"$env:USERPROFILE\\.copilot\\hooks\\run_hook.py\" \"$env:USERPROFILE\\.copilot\\hooks\\scripts\\pre_tool_dangerous_commands.py\"",
         "cwd": ".",
         "timeout": 30
       }
@@ -20,8 +20,8 @@
     "PostToolUse": [
       {
         "type": "command",
-        "command": "python run_hook.py scripts\\post_tool_cleaner.py",
-        "powershell": "& 'python.exe' 'run_hook.py' 'scripts\\post_tool_cleaner.py'",
+        "command": "python \"%USERPROFILE%\\.copilot\\hooks\\run_hook.py\" \"%USERPROFILE%\\.copilot\\hooks\\scripts\\post_tool_cleaner.py\"",
+        "powershell": "& 'python.exe' \"$env:USERPROFILE\\.copilot\\hooks\\run_hook.py\" \"$env:USERPROFILE\\.copilot\\hooks\\scripts\\post_tool_cleaner.py\"",
         "cwd": ".",
         "timeout": 30
       }
@@ -29,8 +29,8 @@
     "Stop": [
       {
         "type": "command",
-        "command": "python run_hook.py scripts\\session_stop.py",
-        "powershell": "& 'python.exe' 'run_hook.py' 'scripts\\session_stop.py'",
+        "command": "python \"%USERPROFILE%\\.copilot\\hooks\\run_hook.py\" \"%USERPROFILE%\\.copilot\\hooks\\scripts\\session_stop.py\"",
+        "powershell": "& 'python.exe' \"$env:USERPROFILE\\.copilot\\hooks\\run_hook.py\" \"$env:USERPROFILE\\.copilot\\hooks\\scripts\\session_stop.py\"",
         "cwd": ".",
         "timeout": 120
       }

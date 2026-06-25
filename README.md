@@ -49,16 +49,19 @@ The Ruff opt-in markers are:
 
 ## Local Setup
 
-1. Create a virtual environment in the repo root using `.venv`, `venv`, or `env`.
-2. Install the development tools with `python -m pip install -r requirements-dev.txt`.
-3. Run the test suite with `pytest`.
-4. Run lint and format checks with `python -m ruff check .` and `python -m ruff format .`.
+1. Install this hooks repo at `%USERPROFILE%\.copilot\hooks` so the configured hook commands can always find `run_hook.py` and the scripts under `scripts/`.
+2. Create a virtual environment in the active project root using `.venv`, `venv`, or `env` when you want the hooks to reuse that project's dependencies.
+3. Install the development tools with `python -m pip install -r requirements-dev.txt`.
+4. Run the test suite with `pytest`.
+5. Run lint and format checks with `python -m ruff check .` and `python -m ruff format .`.
 
-The bootstrap in `run_hook.py` prefers repo-local Python interpreters in this order: `.venv`, `venv`, `env`. If none exists, it falls back to the Python executable that launched the bootstrap.
+The bootstrap in `run_hook.py` always resolves the hook script from the installed hooks directory. It resolves the Python interpreter from the active project working directory in this order: `.venv`, `venv`, `env`. If none exists, it falls back to the Python executable that launched the bootstrap.
 
 ## Local Configuration Notes
 
+- Keep `cwd`: `"."` so repo-aware hooks such as the Ruff cleanup still operate on the active project rather than the hooks repo.
 - `hooks.json` is still a local installation artifact. If this repo is cloned onto another machine, update the hook command paths to match that machine.
+- `hooks.example.json` shows the same fixed hooks location using `%USERPROFILE%` for Command Prompt and `$env:USERPROFILE` for PowerShell.
 
 ## Validation
 

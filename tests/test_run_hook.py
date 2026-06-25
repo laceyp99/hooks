@@ -40,6 +40,19 @@ def test_resolve_python_falls_back_to_current_interpreter(
     assert run_hook._resolve_python(tmp_path) == run_hook.Path("C:/Python/python.exe")
 
 
+def test_resolve_hook_script_anchors_relative_paths_to_hooks_root(
+    load_script_module, monkeypatch, tmp_path
+) -> None:
+    run_hook = load_script_module("run_hook.py", "run_hook_hook_root")
+    hook_script = tmp_path / "scripts" / "session_stop.py"
+    hook_script.parent.mkdir(parents=True)
+    hook_script.write_text("print('ok')\n", encoding="utf-8")
+
+    monkeypatch.setattr(run_hook, "_hooks_root", lambda: tmp_path)
+
+    assert run_hook._resolve_hook_script("scripts/session_stop.py") == hook_script.resolve()
+
+
 def test_main_returns_usage_error_without_script_argument(load_script_module, monkeypatch) -> None:
     run_hook = load_script_module("run_hook.py", "run_hook_usage")
     stderr = io.StringIO()
@@ -69,6 +82,8 @@ def test_main_invokes_hook_with_resolved_python_and_passthrough_stdio(
     run_hook = load_script_module("run_hook.py", "run_hook_main")
     hook_script = tmp_path / "hook.py"
     hook_script.write_text("print('ok')\n", encoding="utf-8")
+    project_root = tmp_path / "project"
+    project_root.mkdir()
     stdout = io.StringIO()
     stderr = io.StringIO()
     stdin_buffer = io.BytesIO(b'{"event": "value"}')
@@ -79,9 +94,14 @@ def test_main_invokes_hook_with_resolved_python_and_passthrough_stdio(
     monkeypatch.setattr(run_hook.sys, "stdin", stdin)
     monkeypatch.setattr(run_hook.sys, "stdout", stdout)
     monkeypatch.setattr(run_hook.sys, "stderr", stderr)
-    monkeypatch.setattr(
-        run_hook, "_resolve_python", lambda cwd: run_hook.Path("C:/Python/python.exe")
-    )
+    monkeypatch.setattr(run_hook, "_project_root", lambda: project_root)
+    monkeypatch.setattr(run_hook, "_resolve_hook_script", lambda arg: hook_script.resolve())
+
+    def _fake_resolve_python(cwd):
+        recorded["python_cwd"] = cwd
+        return run_hook.Path("C:/Python/python.exe")
+
+    monkeypatch.setattr(run_hook, "_resolve_python", _fake_resolve_python)
 
     def _fake_run(command, check, input, stdout, stderr):
         recorded["command"] = command
@@ -103,3 +123,4 @@ def test_main_invokes_hook_with_resolved_python_and_passthrough_stdio(
     assert recorded["input"] == b'{"event": "value"}'
     assert recorded["stdout"] is stdout
     assert recorded["stderr"] is stderr
+    assert recorded["python_cwd"] == project_root
