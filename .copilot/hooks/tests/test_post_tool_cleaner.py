@@ -15,6 +15,8 @@ def _set_stdio(module, monkeypatch, payload: dict):
 @pytest.mark.parametrize(
     ("tool_name", "expected"),
     [
+        ("ApplyPatch", True),
+        ("functions.apply_patch", True),
         ("apply_patch", True),
         ("edit_notebook_file", True),
         ("replace_string_in_file", True),

@@ -19,9 +19,7 @@ import pytest
         ("", False),
     ],
 )
-def test_matches_dangerous_command(
-    pre_tool_dangerous_commands, value: str, expected: bool
-) -> None:
+def test_matches_dangerous_command(pre_tool_dangerous_commands, value: str, expected: bool) -> None:
     assert pre_tool_dangerous_commands._matches_dangerous_command(value) is expected
 
 
@@ -37,9 +35,7 @@ def test_matches_dangerous_command(
         ("apply_patch", False),
     ],
 )
-def test_tool_gating(
-    pre_tool_dangerous_commands, tool_name: str, expected: bool
-) -> None:
+def test_tool_gating(pre_tool_dangerous_commands, tool_name: str, expected: bool) -> None:
     assert pre_tool_dangerous_commands._should_check(tool_name) is expected
 
 

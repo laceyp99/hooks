@@ -24,19 +24,13 @@ def _set_stdio(module, monkeypatch, payload: dict):
     ],
 )
 def test_should_lint(load_script_module, tool_name: str, expected: bool) -> None:
-    cleaner = load_script_module(
-        "scripts/post_tool_cleaner.py", "post_tool_cleaner_should_lint"
-    )
+    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_should_lint")
 
     assert cleaner._should_lint(tool_name) is expected
 
 
-def test_collect_python_paths_recurses_and_deduplicates(
-    load_script_module, tmp_path
-) -> None:
-    cleaner = load_script_module(
-        "scripts/post_tool_cleaner.py", "post_tool_cleaner_collect"
-    )
+def test_collect_python_paths_recurses_and_deduplicates(load_script_module, tmp_path) -> None:
+    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_collect")
     first = tmp_path / "first.py"
     second = tmp_path / "second.py"
     first.write_text("print('a')\n", encoding="utf-8")
@@ -56,12 +50,8 @@ def test_collect_python_paths_recurses_and_deduplicates(
     assert seen == {first.resolve(), second.resolve()}
 
 
-def test_run_ruff_builds_expected_command(
-    load_script_module, monkeypatch, tmp_path
-) -> None:
-    cleaner = load_script_module(
-        "scripts/post_tool_cleaner.py", "post_tool_cleaner_run_ruff"
-    )
+def test_run_ruff_builds_expected_command(load_script_module, monkeypatch, tmp_path) -> None:
+    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_run_ruff")
     path = tmp_path / "module.py"
     path.write_text("print('x')\n", encoding="utf-8")
     recorded = {}
@@ -93,12 +83,8 @@ def test_run_ruff_builds_expected_command(
     assert recorded["text"] is True
 
 
-def test_main_skips_when_repo_does_not_use_ruff(
-    load_script_module, monkeypatch
-) -> None:
-    cleaner = load_script_module(
-        "scripts/post_tool_cleaner.py", "post_tool_cleaner_skip"
-    )
+def test_main_skips_when_repo_does_not_use_ruff(load_script_module, monkeypatch) -> None:
+    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_skip")
     monkeypatch.setattr(cleaner, "repo_uses_ruff", lambda root: False)
     stdout = _set_stdio(
         cleaner,
@@ -110,12 +96,8 @@ def test_main_skips_when_repo_does_not_use_ruff(
     assert stdout.getvalue() == ""
 
 
-def test_main_skips_when_no_python_paths_are_present(
-    load_script_module, monkeypatch
-) -> None:
-    cleaner = load_script_module(
-        "scripts/post_tool_cleaner.py", "post_tool_cleaner_no_paths"
-    )
+def test_main_skips_when_no_python_paths_are_present(load_script_module, monkeypatch) -> None:
+    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_no_paths")
     monkeypatch.setattr(cleaner, "repo_uses_ruff", lambda root: True)
     stdout = _set_stdio(
         cleaner,
@@ -127,12 +109,8 @@ def test_main_skips_when_no_python_paths_are_present(
     assert stdout.getvalue() == ""
 
 
-def test_main_runs_ruff_commands_in_order(
-    load_script_module, monkeypatch, tmp_path
-) -> None:
-    cleaner = load_script_module(
-        "scripts/post_tool_cleaner.py", "post_tool_cleaner_main_order"
-    )
+def test_main_runs_ruff_commands_in_order(load_script_module, monkeypatch, tmp_path) -> None:
+    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_main_order")
     path = tmp_path / "module.py"
     path.write_text("print('x')\n", encoding="utf-8")
     stdout = _set_stdio(
@@ -161,9 +139,7 @@ def test_main_runs_ruff_commands_in_order(
 def test_main_emits_additional_context_for_remaining_ruff_issues(
     load_script_module, monkeypatch, tmp_path
 ) -> None:
-    cleaner = load_script_module(
-        "scripts/post_tool_cleaner.py", "post_tool_cleaner_main_emit"
-    )
+    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_main_emit")
     path = tmp_path / "module.py"
     path.write_text("print('x')\n", encoding="utf-8")
     stdout = _set_stdio(

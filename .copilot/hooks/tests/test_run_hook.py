@@ -103,12 +103,13 @@ def test_main_invokes_hook_with_resolved_python_and_passthrough_stdio(
 
     monkeypatch.setattr(run_hook, "_resolve_python", _fake_resolve_python)
 
-    def _fake_run(command, check, input, stdout, stderr):
+    def _fake_run(command, check, input, stdout, stderr, env):
         recorded["command"] = command
         recorded["check"] = check
         recorded["input"] = input
         recorded["stdout"] = stdout
         recorded["stderr"] = stderr
+        recorded["env"] = env
         return SimpleNamespace(returncode=7)
 
     monkeypatch.setattr(run_hook.subprocess, "run", _fake_run)
@@ -123,4 +124,5 @@ def test_main_invokes_hook_with_resolved_python_and_passthrough_stdio(
     assert recorded["input"] == b'{"event": "value"}'
     assert recorded["stdout"] is stdout
     assert recorded["stderr"] is stderr
+    assert "PYTHONPATH" in recorded["env"]
     assert recorded["python_cwd"] == project_root

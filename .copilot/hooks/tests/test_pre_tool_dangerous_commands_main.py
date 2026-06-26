@@ -32,7 +32,10 @@ def test_main_blocks_dangerous_commands(pre_tool_dangerous_commands, monkeypatch
 
 
 def test_main_allows_safe_commands(pre_tool_dangerous_commands, monkeypatch) -> None:
-    payload = {"toolName": "run_command", "toolArgs": {"command": "python -m pytest -q"}}
+    payload = {
+        "toolName": "run_command",
+        "toolArgs": {"command": "python -m pytest -q"},
+    }
 
     exit_code, output = _run_main(pre_tool_dangerous_commands, monkeypatch, json.dumps(payload))
 

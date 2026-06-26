@@ -26,6 +26,9 @@ def test_matches_dangerous_command(pre_tool_dangerous_commands, value: str, expe
 @pytest.mark.parametrize(
     ("tool_name", "expected"),
     [
+        ("Bash", True),
+        ("functions.shell_command", True),
+        ("command_execution", True),
         ("shell", True),
         ("run_command", True),
         ("read_file", False),
@@ -36,7 +39,9 @@ def test_tool_gating(pre_tool_dangerous_commands, tool_name: str, expected: bool
     assert pre_tool_dangerous_commands._should_check(tool_name) is expected
 
 
-def test_finds_dangerous_command_in_nested_tool_input(pre_tool_dangerous_commands) -> None:
+def test_finds_dangerous_command_in_nested_tool_input(
+    pre_tool_dangerous_commands,
+) -> None:
     payload = {
         "metadata": {"cwd": "C:/repo"},
         "command": {

@@ -56,7 +56,10 @@ def test_main_blocks_git_internal_paths_for_mutating_tools(
 def test_main_allows_git_internal_paths_for_read_only_tools(
     pre_tool_security, git_internal_path, monkeypatch
 ) -> None:
-    payload = {"tool_name": "read_file", "tool_input": {"file_path": git_internal_path("HEAD")}}
+    payload = {
+        "tool_name": "read_file",
+        "tool_input": {"file_path": git_internal_path("HEAD")},
+    }
 
     exit_code, output = _run_main(pre_tool_security, monkeypatch, json.dumps(payload))
 

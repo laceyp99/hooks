@@ -84,9 +84,9 @@ def test_finds_protected_git_paths_in_nested_tool_input(
         },
     }
 
-    assert pre_tool_security._find_protected_git_path(
-        payload
-    ) == "repo/" + git_internal_path("hooks", "pre-commit")
+    assert pre_tool_security._find_protected_git_path(payload) == "repo/" + git_internal_path(
+        "hooks", "pre-commit"
+    )
 
 
 def test_finds_env_paths_in_nested_tool_input(pre_tool_security) -> None:
@@ -110,9 +110,7 @@ def test_finds_env_paths_embedded_in_shell_commands(pre_tool_security) -> None:
     assert pre_tool_security._find_env_path(payload) == env_path
 
 
-def test_finds_git_paths_embedded_in_shell_commands(
-    pre_tool_security, git_internal_path
-) -> None:
+def test_finds_git_paths_embedded_in_shell_commands(pre_tool_security, git_internal_path) -> None:
     protected_path = git_internal_path("hooks", "pre-commit")
     payload = {"command": "Set-Content " + protected_path}
 

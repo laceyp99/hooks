@@ -2,18 +2,14 @@ import io
 from types import SimpleNamespace
 
 
-def test_venv_python_path_uses_windows_layout(
-    load_script_module, monkeypatch, tmp_path
-) -> None:
+def test_venv_python_path_uses_windows_layout(load_script_module, monkeypatch, tmp_path) -> None:
     run_hook = load_script_module("run_hook.py", "run_hook_windows")
     monkeypatch.setattr(run_hook.sys, "platform", "win32")
 
     assert run_hook._venv_python_path(tmp_path) == tmp_path / "Scripts" / "python.exe"
 
 
-def test_venv_python_path_uses_posix_layout(
-    load_script_module, monkeypatch, tmp_path
-) -> None:
+def test_venv_python_path_uses_posix_layout(load_script_module, monkeypatch, tmp_path) -> None:
     run_hook = load_script_module("run_hook.py", "run_hook_posix")
     monkeypatch.setattr(run_hook.sys, "platform", "linux")
 
@@ -54,15 +50,10 @@ def test_resolve_hook_script_anchors_relative_paths_to_hooks_root(
 
     monkeypatch.setattr(run_hook, "_hooks_root", lambda: tmp_path)
 
-    assert (
-        run_hook._resolve_hook_script("scripts/session_stop.py")
-        == hook_script.resolve()
-    )
+    assert run_hook._resolve_hook_script("scripts/session_stop.py") == hook_script.resolve()
 
 
-def test_main_returns_usage_error_without_script_argument(
-    load_script_module, monkeypatch
-) -> None:
+def test_main_returns_usage_error_without_script_argument(load_script_module, monkeypatch) -> None:
     run_hook = load_script_module("run_hook.py", "run_hook_usage")
     stderr = io.StringIO()
     monkeypatch.setattr(run_hook.sys, "argv", ["run_hook.py"])
@@ -99,16 +90,12 @@ def test_main_invokes_hook_with_resolved_python_and_passthrough_stdio(
     stdin = SimpleNamespace(buffer=stdin_buffer)
     recorded = {}
 
-    monkeypatch.setattr(
-        run_hook.sys, "argv", ["run_hook.py", str(hook_script), "--flag"]
-    )
+    monkeypatch.setattr(run_hook.sys, "argv", ["run_hook.py", str(hook_script), "--flag"])
     monkeypatch.setattr(run_hook.sys, "stdin", stdin)
     monkeypatch.setattr(run_hook.sys, "stdout", stdout)
     monkeypatch.setattr(run_hook.sys, "stderr", stderr)
     monkeypatch.setattr(run_hook, "_project_root", lambda: project_root)
-    monkeypatch.setattr(
-        run_hook, "_resolve_hook_script", lambda arg: hook_script.resolve()
-    )
+    monkeypatch.setattr(run_hook, "_resolve_hook_script", lambda arg: hook_script.resolve())
 
     def _fake_resolve_python(cwd):
         recorded["python_cwd"] = cwd
@@ -116,12 +103,13 @@ def test_main_invokes_hook_with_resolved_python_and_passthrough_stdio(
 
     monkeypatch.setattr(run_hook, "_resolve_python", _fake_resolve_python)
 
-    def _fake_run(command, check, input, stdout, stderr):
+    def _fake_run(command, check, input, stdout, stderr, env):
         recorded["command"] = command
         recorded["check"] = check
         recorded["input"] = input
         recorded["stdout"] = stdout
         recorded["stderr"] = stderr
+        recorded["env"] = env
         return SimpleNamespace(returncode=7)
 
     monkeypatch.setattr(run_hook.subprocess, "run", _fake_run)
@@ -136,4 +124,5 @@ def test_main_invokes_hook_with_resolved_python_and_passthrough_stdio(
     assert recorded["input"] == b'{"event": "value"}'
     assert recorded["stdout"] is stdout
     assert recorded["stderr"] is stderr
+    assert "PYTHONPATH" in recorded["env"]
     assert recorded["python_cwd"] == project_root
