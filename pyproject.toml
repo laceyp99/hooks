@@ -1,12 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "copilot-hooks"
+name = "hooks"
 version = "0.1.0"
-description = "Personal GitHub Copilot hook scripts for local safety and repo hygiene."
+description = "Personal Coding Agent hook scripts for local safety and repo hygiene."
 requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
-addopts = "-q"
-testpaths = ["tests"]
+addopts = "-q --import-mode=importlib"
+testpaths = [".copilot/hooks/tests", ".codex/hooks/tests"]
 
 [tool.ruff]
 target-version = "py310"
