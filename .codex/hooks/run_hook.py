@@ -2,6 +2,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+
+def _bootstrap_bundle_src_path() -> None:
+    bundle_src = Path(__file__).resolve().parents[2] / "src"
+    bundle_src_str = str(bundle_src)
+    if bundle_src_str not in sys.path:
+        sys.path.insert(0, bundle_src_str)
+
+
+_bootstrap_bundle_src_path()
+
 from agent_hooks import bootstrap as _impl
 
 VENV_DIR_NAMES = _impl.VENV_DIR_NAMES
