@@ -1,0 +1,52 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.codex/hooks/run_hook.py scripts/pre_tool_security.py",
+            "commandWindows": "python.exe \"$env:USERPROFILE\\.codex\\hooks\\run_hook.py\" \"$env:USERPROFILE\\.codex\\hooks\\scripts\\pre_tool_security.py\"",
+            "timeout": 30,
+            "statusMessage": "Checking protected paths"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.codex/hooks/run_hook.py scripts/pre_tool_dangerous_commands.py",
+            "commandWindows": "python.exe \"$env:USERPROFILE\\.codex\\hooks\\run_hook.py\" \"$env:USERPROFILE\\.codex\\hooks\\scripts\\pre_tool_dangerous_commands.py\"",
+            "timeout": 30,
+            "statusMessage": "Checking dangerous commands"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.codex/hooks/run_hook.py scripts/post_tool_cleaner.py",
+            "commandWindows": "python.exe \"$env:USERPROFILE\\.codex\\hooks\\run_hook.py\" \"$env:USERPROFILE\\.codex\\hooks\\scripts\\post_tool_cleaner.py\"",
+            "timeout": 30,
+            "statusMessage": "Cleaning edited Python files"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.codex/hooks/run_hook.py scripts/session_stop.py",
+            "commandWindows": "python.exe \"$env:USERPROFILE\\.codex\\hooks\\run_hook.py\" \"$env:USERPROFILE\\.codex\\hooks\\scripts\\session_stop.py\"",
+            "timeout": 120,
+            "statusMessage": "Running session stop checks"
+          }
+        ]
+      }
+    ]
+  }
+}

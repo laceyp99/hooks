@@ -25,4 +25,5 @@ Thumbs.db
 
 .vscode/
 
-hooks.json
+.codex/hooks.json
+.copilot/hooks/hooks.json
