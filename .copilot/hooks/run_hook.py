@@ -10,9 +10,14 @@ def _bootstrap_bundle_src_path() -> None:
         sys.path.insert(0, bundle_src_str)
 
 
-_bootstrap_bundle_src_path()
+def _load_impl():
+    _bootstrap_bundle_src_path()
+    from agent_hooks import bootstrap as impl
 
-from agent_hooks import bootstrap as _impl
+    return impl
+
+
+_impl = _load_impl()
 
 VENV_DIR_NAMES = _impl.VENV_DIR_NAMES
 _hooks_root = _impl._hooks_root
