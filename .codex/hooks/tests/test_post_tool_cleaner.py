@@ -130,8 +130,8 @@ def test_main_runs_ruff_commands_in_order(load_script_module, monkeypatch, tmp_p
     assert cleaner.main() == 0
     assert stdout.getvalue() == ""
     assert calls == [
-        ("format", ["module.py"], ()),
         ("check", ["module.py"], ("--fix",)),
+        ("format", ["module.py"], ()),
         ("check", ["module.py"], ()),
     ]
 
@@ -150,8 +150,8 @@ def test_main_emits_additional_context_for_remaining_ruff_issues(
     monkeypatch.setattr(cleaner, "repo_uses_ruff", lambda root: True)
     results = iter(
         [
-            (0, "", ""),
             (1, "fixed one issue", ""),
+            (0, "", ""),
             (1, "", "still failing"),
         ]
     )
@@ -162,4 +162,5 @@ def test_main_emits_additional_context_for_remaining_ruff_issues(
     message = json.loads(stdout.getvalue())
     assert message["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
     assert "ruff check --fix" in message["hookSpecificOutput"]["additionalContext"]
+    assert "ruff format" not in message["hookSpecificOutput"]["additionalContext"]
     assert "ruff check" in message["hookSpecificOutput"]["additionalContext"]

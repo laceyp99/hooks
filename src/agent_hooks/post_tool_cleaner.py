@@ -121,17 +121,17 @@ def main() -> int:
     python_paths = sorted(paths)
     details: list[str] = []
 
-    format_code, format_stdout, format_stderr = _run_ruff("format", python_paths)
-    if format_code != 0:
-        format_output = (format_stdout or format_stderr).strip()
-        if format_output:
-            details.append(f"ruff format:\n{format_output}")
-
     fix_code, fix_stdout, fix_stderr = _run_ruff("check", python_paths, "--fix")
     if fix_code != 0:
         fix_output = (fix_stdout or fix_stderr).strip()
         if fix_output:
             details.append(f"ruff check --fix:\n{fix_output}")
+
+    format_code, format_stdout, format_stderr = _run_ruff("format", python_paths)
+    if format_code != 0:
+        format_output = (format_stdout or format_stderr).strip()
+        if format_output:
+            details.append(f"ruff format:\n{format_output}")
 
     check_code, check_stdout, check_stderr = _run_ruff("check", python_paths)
     if check_code != 0:
