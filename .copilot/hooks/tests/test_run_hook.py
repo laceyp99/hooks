@@ -1,5 +1,15 @@
 import io
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+COPILOT_BUNDLE_ROOT = REPO_ROOT / ".copilot" / "hooks"
+REPO_SRC = REPO_ROOT / "src"
 
 
 def test_venv_python_path_uses_windows_layout(load_script_module, monkeypatch, tmp_path) -> None:
@@ -126,3 +136,42 @@ def test_main_invokes_hook_with_resolved_python_and_passthrough_stdio(
     assert recorded["stderr"] is stderr
     assert "PYTHONPATH" in recorded["env"]
     assert recorded["python_cwd"] == project_root
+
+
+def test_run_hook_imports_from_a_copied_bundle_without_repo_src_on_sys_path(
+    tmp_path,
+) -> None:
+    bundle_root = tmp_path / "bundle"
+    hooks_dir = bundle_root / ".copilot" / "hooks"
+    src_dir = bundle_root / "src" / "agent_hooks"
+    hooks_dir.mkdir(parents=True)
+    src_dir.mkdir(parents=True)
+    shutil.copy2(COPILOT_BUNDLE_ROOT / "run_hook.py", hooks_dir / "run_hook.py")
+    shutil.copy2(REPO_SRC / "agent_hooks" / "bootstrap.py", src_dir / "bootstrap.py")
+    (src_dir / "__init__.py").write_text("", encoding="utf-8")
+
+    code = """
+import importlib.util
+from pathlib import Path
+
+path = Path({path!r})
+spec = importlib.util.spec_from_file_location('clean_room_run_hook', path)
+if spec is None or spec.loader is None:
+    raise RuntimeError('Unable to load module from ' + str(path))
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+""".format(path=str(hooks_dir / 'run_hook.py'))
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    env["PYTHONNOUSERSITE"] = "1"
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=bundle_root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "ModuleNotFoundError" not in completed.stderr

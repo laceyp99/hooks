@@ -80,26 +80,29 @@ The repo copy is where you edit files. The installed bundle is what the hook sys
    - On Windows, `%USERPROFILE%` means your personal home folder, such as `C:\Users\YourName`.
    - If you already copied `src` in step 2, running this again is harmless.
 
-4. Keep `src/agent_hooks/` in the source repo so the wrapper scripts can import the shared hook logic.
+4. The wrapper scripts load the shared hook logic from the copied `src/agent_hooks/` folder next to your user-profile bundles.
+   - You do not need a repo install or manual `PYTHONPATH` for normal hook execution.
+   - Keep `src/agent_hooks/` in the source repo so you can refresh the installed copy when you update the hooks.
+
 5. If you want the hooks to reuse a project’s dependencies, create a virtual environment in that project.
 
    ```bash
    python -m venv venv
    ```
 
-6. Install the development tools.
+6. Optional for development: install the repo’s test and lint tools in a working checkout.
 
    ```bash
    python -m pip install -e ".[dev]"
    ```
 
-7. Run the test suite.
+7. Run the test suite from the repo checkout.
 
    ```bash
    pytest -q --import-mode=importlib
    ```
 
-8. Run lint and format checks.
+8. Run lint and format checks when you are changing code.
 
    ```bash
    python -m ruff check .
@@ -116,6 +119,8 @@ The repo copy is where you edit files. The installed bundle is what the hook sys
 ## Repository Layout
 
 The repo is organized as a small local bundle plus shared logic. Each harness gets its own thin wrapper folder, while the actual hook behavior lives once under `src/agent_hooks/`.
+
+The installed bundles also expect a copied `src/` folder beside `.copilot/hooks/` or `.codex/hooks/` in your Windows user profile so the wrapper scripts can bootstrap themselves before importing the shared hook logic.
 
 ```text
 Hooks
