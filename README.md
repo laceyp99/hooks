@@ -88,29 +88,36 @@ The repo copy is where you edit files. The installed bundle is what the hook sys
    - `hooks.example.json` is the checked-in template; `hooks.json` is your local copy that Codex reads from `%USERPROFILE%\.codex\hooks.json`.
    - This gives Codex the hook registration, the bootstrap script, the wrapper scripts, and the shared `src` folder it needs.
 
-4. The wrapper scripts load the shared hook logic from the copied `src/agent_hooks/` folder next to your user-profile bundles.
+4.  Install the Pi bundle into your user profile. Create the Pi extension directory and copy the bridge into place.
+
+   ```powershell
+   New-Item -ItemType Directory -Force "$env:USERPROFILE\.pi\agent\extensions" | Out-Null
+   Copy-Item -Force ".pi\agent\extensions\agent-hooks.ts" "$env:USERPROFILE\.pi\agent\extensions\agent-hooks.ts"
+   ```
+
+5. The wrapper scripts load the shared hook logic from the copied `src/agent_hooks/` folder next to your user-profile bundles.
    - You do not need a repo install or manual `PYTHONPATH` for normal hook execution.
    - Keep `src/agent_hooks/` in the source repo so you can refresh the installed copy when you update the hooks.
 
-5. If you want the hooks to reuse a project’s dependencies, create a virtual environment in that project.
+6. If you want the hooks to reuse a project’s dependencies, create a virtual environment in that project.
 
    ```bash
    python -m venv venv
    ```
 
-6. Optional for development: install the repo’s test and lint tools in a working checkout.
+7. Optional for development: install the repo’s test and lint tools in a working checkout.
 
    ```bash
    python -m pip install -e ".[dev]"
    ```
 
-7. Run the test suite from the repo checkout.
+8. Run the test suite from the repo checkout.
 
    ```bash
    pytest -q --import-mode=importlib
    ```
 
-8. Run lint and format checks when you are changing code.
+9. Run lint and format checks when you are changing code.
 
    ```bash
    python -m ruff check .
@@ -129,7 +136,7 @@ The repo copy is where you edit files. The installed bundle is what the hook sys
 
 The repo is organized as a small local bundle plus shared logic. Each harness gets its own thin wrapper folder, while the actual hook behavior lives once under `src/agent_hooks/`.
 
-The installed bundles also expect a copied `src/` folder beside `.copilot/hooks/` or `.codex/hooks/` in your Windows user profile so the wrapper scripts can bootstrap themselves before importing the shared hook logic. The layout below shows the source checkout; the installed user-profile copy mirrors the same `hooks/` and `src/` structure, except that Codex reads its local config from `%USERPROFILE%\.codex\hooks.json`.
+The installed bundles also expect a copied `src/` folder beside `.copilot/hooks/` or `.codex/hooks/` in your Windows user profile so the wrapper scripts can bootstrap themselves before importing the shared hook logic. Pi is different: its installed bridge lives in `~/.pi/agent/extensions/`, but it points back at the source checkout that contains the Python hook code. The layout below shows the source checkout; the installed user-profile copy mirrors the same `hooks/` and `src/` structure, except that Codex reads its local config from `%USERPROFILE%\.codex\hooks.json`.
 
 ```text
 Hooks
@@ -146,12 +153,13 @@ Hooks
 │     ├─ run_hook.py                # Bootstrap that finds a compatible Python and launches one hook script
 │     ├─ scripts/                   # Thin wrappers around shared hook logic
 │     └─ tests/                     # Tests for the Codex bundle
+├─ pi/agent-hooks.ts                # Global Pi extension bridge that calls the Python hooks
 ├─ src/agent_hooks/                 # Shared hook logic used by both bundles
 │  ├─ bootstrap.py                  # Shared bootstrap helpers and interpreter selection
 │  ├─ common.py                    # Shared utility helpers
 │  ├─ dangerous_commands.py        # Dangerous-command detection
 │  ├─ post_tool_cleaner.py          # Post-tool cleanup logic
-│  ├─ ruff_support.py              # Ruff opt-in detection
+│  ├─ ruff_support.py               # Ruff opt-in detection
 │  ├─ security.py                  # Protected-path and secret-file checks
 │  └─ session_stop.py              # End-of-session cleanup logic
 ├─ pyproject.toml                  # Packaging, test, and Ruff settings

@@ -42,6 +42,7 @@ FILE_ACCESS_TOOLS = {
     "edit",
     "edit_tool",
     "move_file",
+    "read",
     "read_file",
     "rename",
     "shell",
