@@ -24,6 +24,7 @@ _hooks_root = _impl._hooks_root
 _project_root = _impl._project_root
 _resolve_hook_script_impl = _impl._resolve_hook_script
 _resolve_python = _impl._resolve_python
+_resolve_python_command = _impl._resolve_python_command
 _venv_python_path = _impl._venv_python_path
 
 
@@ -46,6 +47,7 @@ def main() -> int:
         "_project_root": _impl._project_root,
         "_resolve_hook_script": _impl._resolve_hook_script,
         "_resolve_python": _impl._resolve_python,
+        "_resolve_python_command": _impl._resolve_python_command,
         "_venv_python_path": _impl._venv_python_path,
         "subprocess": _impl.subprocess,
         "sys": _impl.sys,
@@ -58,6 +60,7 @@ def main() -> int:
         _impl._project_root = _project_root
         _impl._resolve_hook_script = _resolve_hook_script
         _impl._resolve_python = _resolve_python
+        _impl._resolve_python_command = _resolve_python_command
         _impl._venv_python_path = _venv_python_path
         return _impl.main()
     finally:
@@ -66,6 +69,7 @@ def main() -> int:
         _impl._project_root = originals["_project_root"]
         _impl._resolve_hook_script = originals["_resolve_hook_script"]
         _impl._resolve_python = originals["_resolve_python"]
+        _impl._resolve_python_command = originals["_resolve_python_command"]
         _impl._venv_python_path = originals["_venv_python_path"]
         _impl.subprocess = originals["subprocess"]
         _impl.sys = originals["sys"]

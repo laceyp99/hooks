@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CODEX_BUNDLE_ROOT = REPO_ROOT / ".codex" / "hooks"
@@ -31,14 +33,18 @@ def test_resolve_python_prefers_first_existing_virtualenv(
 ) -> None:
     run_hook = load_script_module("run_hook.py", "run_hook_resolve")
     monkeypatch.setattr(run_hook.sys, "platform", "win32")
-    preferred = tmp_path / ".venv" / "Scripts"
-    fallback = tmp_path / "venv" / "Scripts"
-    preferred.mkdir(parents=True)
-    fallback.mkdir(parents=True)
-    (preferred / "python.exe").write_text("", encoding="utf-8")
-    (fallback / "python.exe").write_text("", encoding="utf-8")
+    preferred = tmp_path / ".venv"
+    fallback = tmp_path / "venv"
+    preferred_scripts = preferred / "Scripts"
+    fallback_scripts = fallback / "Scripts"
+    preferred_scripts.mkdir(parents=True)
+    fallback_scripts.mkdir(parents=True)
+    (preferred / "pyvenv.cfg").write_text("version = 3.11.0\n", encoding="utf-8")
+    (fallback / "pyvenv.cfg").write_text("version = 3.11.0\n", encoding="utf-8")
+    (preferred_scripts / "python.exe").write_text("", encoding="utf-8")
+    (fallback_scripts / "python.exe").write_text("", encoding="utf-8")
 
-    assert run_hook._resolve_python(tmp_path) == preferred / "python.exe"
+    assert run_hook._resolve_python(tmp_path) == preferred_scripts / "python.exe"
 
 
 def test_resolve_python_falls_back_to_current_interpreter(
@@ -48,6 +54,61 @@ def test_resolve_python_falls_back_to_current_interpreter(
     monkeypatch.setattr(run_hook.sys, "executable", "C:/Python/python.exe")
 
     assert run_hook._resolve_python(tmp_path) == run_hook.Path("C:/Python/python.exe")
+
+
+def test_resolve_python_command_uses_current_interpreter_when_supported(
+    load_script_module, monkeypatch, tmp_path
+) -> None:
+    run_hook = load_script_module("run_hook.py", "run_hook_command_current")
+    monkeypatch.setattr(run_hook.sys, "executable", "C:/Python/python.exe")
+    monkeypatch.setattr(run_hook.sys, "version_info", (3, 11, 0))
+
+    assert run_hook._resolve_python_command(tmp_path) == [run_hook.sys.executable]
+
+
+def test_resolve_python_command_uses_py_310_fallback_when_current_is_too_old(
+    load_script_module, monkeypatch, tmp_path
+) -> None:
+    run_hook = load_script_module("run_hook.py", "run_hook_command_fallback")
+    monkeypatch.setattr(run_hook.sys, "executable", "C:/Python/python.exe")
+    monkeypatch.setattr(run_hook.sys, "version_info", (3, 9, 9))
+    monkeypatch.setattr(run_hook.sys, "platform", "win32")
+
+    assert run_hook._resolve_python_command(tmp_path) == ["py", "-3.10"]
+
+
+def test_resolve_python_command_raises_when_too_old_and_no_windows_fallback(
+    load_script_module, monkeypatch, tmp_path
+) -> None:
+    run_hook = load_script_module("run_hook.py", "run_hook_command_error")
+    monkeypatch.setattr(run_hook.sys, "executable", "C:/Python/python.exe")
+    monkeypatch.setattr(run_hook.sys, "version_info", (3, 9, 9))
+    monkeypatch.setattr(run_hook.sys, "platform", "linux")
+
+    with pytest.raises(RuntimeError, match="no compatible fallback"):
+        run_hook._resolve_python_command(tmp_path)
+
+
+def test_main_returns_error_when_python_launch_fails(
+    load_script_module, monkeypatch, tmp_path
+) -> None:
+    run_hook = load_script_module("run_hook.py", "run_hook_launch_error")
+    hook_script = tmp_path / "hook.py"
+    hook_script.write_text("print('ok')\n", encoding="utf-8")
+    stderr = io.StringIO()
+    monkeypatch.setattr(run_hook.sys, "argv", ["run_hook.py", str(hook_script)])
+    monkeypatch.setattr(run_hook.sys, "stderr", stderr)
+    monkeypatch.setattr(run_hook.sys, "stdin", io.BytesIO(b""))
+    monkeypatch.setattr(run_hook, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(run_hook, "_resolve_python_command", lambda cwd: ["py", "-3.10"])
+
+    def _raise(*args, **kwargs):
+        raise OSError("boom")
+
+    monkeypatch.setattr(run_hook.subprocess, "run", _raise)
+
+    assert run_hook.main() == 2
+    assert "Unable to launch hook interpreter" in stderr.getvalue()
 
 
 def test_resolve_hook_script_anchors_relative_paths_to_hooks_root(
@@ -160,7 +221,7 @@ if spec is None or spec.loader is None:
     raise RuntimeError('Unable to load module from ' + str(path))
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
-""".format(path=str(hooks_dir / 'run_hook.py'))
+""".format(path=str(hooks_dir / "run_hook.py"))
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)
     env["PYTHONNOUSERSITE"] = "1"
