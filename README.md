@@ -6,6 +6,10 @@ If you are new to hooks: they are small scripts that run automatically at specif
 
 ## Hook Behavior
 
+### Interpreter Selection
+
+Each hook launch goes through a small bootstrapper that picks a compatible Python in a predictable order: project virtual environment first, then the current interpreter, with a Windows fallback to `py -3.10` when the active interpreter is too old.
+
 ### PreToolUse Security
 
 The security hook blocks access to secret-bearing env files such as `.env`, `.env.local`, `.env.production`, `.envrc`, `*.env`, `*.secret`, `*.secrets`, and anything under `.direnv/`. Template files such as `.env.example` and `.env.sample` stay allowed.
@@ -25,7 +29,7 @@ This is intentionally conservative. It is meant to stop obvious foot-guns, not t
 
 ### PostToolUse Cleaner
 
-The post-tool cleaner runs `ruff format`, then `ruff check --fix`, then `ruff check` against edited Python files. It only does this when the current repo advertises Ruff support.
+The post-tool cleaner runs `ruff check --fix`, then `ruff format`, then `ruff check` against edited Python files. It only does this when the current repo advertises Ruff support.
 
 ### Session Stop Ruff Sweep
 
@@ -60,6 +64,8 @@ The repo copy is where you edit files. The installed bundle is what the hook sys
 
    ```powershell
    New-Item -ItemType Directory -Force "$env:USERPROFILE\.copilot\hooks" | Out-Null
+   Copy-Item -Force ".copilot\hooks\hooks.json" "$env:USERPROFILE\.copilot\hooks\hooks.json"
+   Copy-Item -Force ".copilot\hooks\hooks.example.json" "$env:USERPROFILE\.copilot\hooks\hooks.example.json"
    Copy-Item -Recurse -Force ".copilot\hooks\*" "$env:USERPROFILE\.copilot\hooks\"
    Copy-Item -Recurse -Force "src" "$env:USERPROFILE\"
    ```
@@ -72,13 +78,15 @@ The repo copy is where you edit files. The installed bundle is what the hook sys
 
    ```powershell
    New-Item -ItemType Directory -Force "$env:USERPROFILE\.codex\hooks" | Out-Null
+   Copy-Item -Force ".codex\hooks.json" "$env:USERPROFILE\.codex\hooks.json"
+   Copy-Item -Force ".codex\hooks.example.json" "$env:USERPROFILE\.codex\hooks.example.json"
    Copy-Item -Recurse -Force ".codex\hooks\*" "$env:USERPROFILE\.codex\hooks\"
    Copy-Item -Recurse -Force "src" "$env:USERPROFILE\"
    ```
 
    - If the destination folder does not exist yet, the command creates it.
    - On Windows, `%USERPROFILE%` means your personal home folder, such as `C:\Users\YourName`.
-   - If you already copied `src` in step 2, running this again is harmless.
+   - This gives Codex the hook registration, the example file, the bootstrap script, the wrapper scripts, and the shared `src` folder it needs.
 
 4. The wrapper scripts load the shared hook logic from the copied `src/agent_hooks/` folder next to your user-profile bundles.
    - You do not need a repo install or manual `PYTHONPATH` for normal hook execution.
@@ -120,32 +128,34 @@ The repo copy is where you edit files. The installed bundle is what the hook sys
 
 The repo is organized as a small local bundle plus shared logic. Each harness gets its own thin wrapper folder, while the actual hook behavior lives once under `src/agent_hooks/`.
 
-The installed bundles also expect a copied `src/` folder beside `.copilot/hooks/` or `.codex/hooks/` in your Windows user profile so the wrapper scripts can bootstrap themselves before importing the shared hook logic.
+The installed bundles also expect a copied `src/` folder beside `.copilot/hooks/` or `.codex/hooks/` in your Windows user profile so the wrapper scripts can bootstrap themselves before importing the shared hook logic. The layout below shows the source checkout; the installed user-profile copy mirrors the same `hooks/` and `src/` structure.
 
 ```text
 Hooks
-├─ .copilot/hooks/                 # Copilot-specific local bundle
-│  ├─ hooks.json                  # Local hook registration used by Copilot
-│  ├─ hooks.example.json          # Shareable sample config with user-profile placeholders
-│  ├─ run_hook.py                 # Bootstrap that finds Python and launches one hook script
-│  ├─ scripts/                    # Thin wrappers around shared hook logic
-│  └─ tests/                      # Tests for the Copilot bundle
-├─ .codex/hooks/                   # Codex-specific local bundle
-│  ├─ hooks.json                  # Local hook registration used by Codex
-│  ├─ hooks.example.json          # Shareable sample config with user-profile placeholders
-│  ├─ run_hook.py                 # Bootstrap that finds Python and launches one hook script
-│  ├─ scripts/                    # Thin wrappers around shared hook logic
-│  └─ tests/                      # Tests for the Codex bundle
-├─ src/agent_hooks/                # Shared hook logic used by both bundles
-│  ├─ bootstrap.py                # Shared bootstrap helpers
-│  ├─ common.py                   # Shared utility helpers
-│  ├─ dangerous_commands.py       # Dangerous-command detection
-│  ├─ post_tool_cleaner.py        # Post-tool cleanup logic
-│  ├─ ruff_support.py             # Ruff opt-in detection
-│  ├─ security.py                 # Protected-path and secret-file checks
-│  └─ session_stop.py             # End-of-session cleanup logic
-├─ pyproject.toml                 # Packaging, test, and Ruff settings
-└─ README.md                      # This guide
+├─ .copilot/
+│  └─ hooks/
+│     ├─ hooks.json                 # Local hook registration used by Copilot
+│     ├─ hooks.example.json         # Shareable sample config with user-profile placeholders
+│     ├─ run_hook.py                # Bootstrap that finds a compatible Python and launches one hook script
+│     ├─ scripts/                   # Thin wrappers around shared hook logic
+│     └─ tests/                     # Tests for the Copilot bundle
+├─ .codex/
+│  └─ hooks/
+│     ├─ hooks.json                 # Local hook registration used by Codex
+│     ├─ hooks.example.json         # Shareable sample config with user-profile placeholders
+│     ├─ run_hook.py                # Bootstrap that finds a compatible Python and launches one hook script
+│     ├─ scripts/                   # Thin wrappers around shared hook logic
+│     └─ tests/                     # Tests for the Codex bundle
+├─ src/agent_hooks/                 # Shared hook logic used by both bundles
+│  ├─ bootstrap.py                  # Shared bootstrap helpers and interpreter selection
+│  ├─ common.py                    # Shared utility helpers
+│  ├─ dangerous_commands.py        # Dangerous-command detection
+│  ├─ post_tool_cleaner.py          # Post-tool cleanup logic
+│  ├─ ruff_support.py              # Ruff opt-in detection
+│  ├─ security.py                  # Protected-path and secret-file checks
+│  └─ session_stop.py              # End-of-session cleanup logic
+├─ pyproject.toml                  # Packaging, test, and Ruff settings
+└─ README.md                       # This guide
 ```
 
 The Copilot and Codex bundles do not need to be perfectly symmetric. They just need to work with the command formats and install locations required by each harness.
