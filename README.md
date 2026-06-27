@@ -2,8 +2,6 @@
 
 This repository contains local hook scripts for coding agents. The hooks act as guardrails for safety and repo hygiene while you work. The checked-in Copilot and Codex configs show how to wire the scripts into each harness on your machine.
 
-If you are new to hooks: they are small scripts that run automatically at specific moments, such as before a tool runs, after a tool runs, or when a session ends.
-
 ## Hook Behavior
 
 ### Interpreter Selection
@@ -60,33 +58,35 @@ The repo copy is where you edit files. The installed bundle is what the hook sys
 
    If you already have the repo checked out, just open a terminal in that folder.
 
-2. Install the Copilot bundle into your user profile.
+2. Install the Copilot bundle into your user profile, then create your local `hooks.json` from the example file.
 
    ```powershell
    New-Item -ItemType Directory -Force "$env:USERPROFILE\.copilot\hooks" | Out-Null
-   Copy-Item -Force ".copilot\hooks\hooks.json" "$env:USERPROFILE\.copilot\hooks\hooks.json"
-   Copy-Item -Force ".copilot\hooks\hooks.example.json" "$env:USERPROFILE\.copilot\hooks\hooks.example.json"
-   Copy-Item -Recurse -Force ".copilot\hooks\*" "$env:USERPROFILE\.copilot\hooks\"
+   Copy-Item -Force ".copilot\hooks\hooks.example.json" "$env:USERPROFILE\.copilot\hooks\hooks.json"
+   Copy-Item -Force ".copilot\hooks\run_hook.py" "$env:USERPROFILE\.copilot\hooks\run_hook.py"
+   Copy-Item -Recurse -Force ".copilot\hooks\scripts" "$env:USERPROFILE\.copilot\hooks\scripts"
    Copy-Item -Recurse -Force "src" "$env:USERPROFILE\"
    ```
 
    - If the destination folder does not exist yet, the command creates it.
    - On Windows, `%USERPROFILE%` means your personal home folder, such as `C:\Users\YourName`.
-   - This gives Copilot the hook registration, the example file, the bootstrap script, the wrapper scripts, and the shared `src` folder it needs.
+   - `hooks.example.json` is the checked-in template; `hooks.json` is your local copy that you can edit.
+   - This gives Copilot the hook registration, the bootstrap script, the wrapper scripts, and the shared `src` folder it needs.
 
-3. Install the Codex bundle into your user profile.
+3. Install the Codex bundle into your user profile, then create your local `hooks.json` from the example file.
 
    ```powershell
    New-Item -ItemType Directory -Force "$env:USERPROFILE\.codex\hooks" | Out-Null
-   Copy-Item -Force ".codex\hooks.json" "$env:USERPROFILE\.codex\hooks.json"
-   Copy-Item -Force ".codex\hooks.example.json" "$env:USERPROFILE\.codex\hooks.example.json"
-   Copy-Item -Recurse -Force ".codex\hooks\*" "$env:USERPROFILE\.codex\hooks\"
+   Copy-Item -Force ".codex\hooks.example.json" "$env:USERPROFILE\.codex\hooks\hooks.json"
+   Copy-Item -Force ".codex\hooks\run_hook.py" "$env:USERPROFILE\.codex\hooks\run_hook.py"
+   Copy-Item -Recurse -Force ".codex\hooks\scripts" "$env:USERPROFILE\.codex\hooks\scripts"
    Copy-Item -Recurse -Force "src" "$env:USERPROFILE\"
    ```
 
    - If the destination folder does not exist yet, the command creates it.
    - On Windows, `%USERPROFILE%` means your personal home folder, such as `C:\Users\YourName`.
-   - This gives Codex the hook registration, the example file, the bootstrap script, the wrapper scripts, and the shared `src` folder it needs.
+   - `hooks.example.json` is the checked-in template; `hooks.json` is your local copy that you can edit.
+   - This gives Codex the hook registration, the bootstrap script, the wrapper scripts, and the shared `src` folder it needs.
 
 4. The wrapper scripts load the shared hook logic from the copied `src/agent_hooks/` folder next to your user-profile bundles.
    - You do not need a repo install or manual `PYTHONPATH` for normal hook execution.
