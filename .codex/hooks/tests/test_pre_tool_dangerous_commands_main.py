@@ -31,6 +31,48 @@ def test_main_blocks_dangerous_commands(pre_tool_dangerous_commands, monkeypatch
     assert blocked in message["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+def test_main_blocks_protected_git_mutations(pre_tool_dangerous_commands, monkeypatch) -> None:
+    payloads = [
+        "rm -rf .git",
+        "git rm -r .git",
+        "git mv .git/config .git/config.bak",
+    ]
+
+    for blocked in payloads:
+        payload = {"tool_name": "shell", "tool_input": {"command": blocked}}
+
+        exit_code, output = _run_main(pre_tool_dangerous_commands, monkeypatch, json.dumps(payload))
+        message = json.loads(output)
+
+        assert exit_code == 0
+        assert message["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert blocked in message["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_main_allows_git_clone_and_checkout(pre_tool_dangerous_commands, monkeypatch) -> None:
+    payloads = [
+        {"tool_name": "shell", "tool_input": {"command": "git clone https://example.com/repo.git"}},
+        {"tool_name": "shell", "tool_input": {"command": "git checkout feature"}},
+    ]
+
+    for payload in payloads:
+        exit_code, output = _run_main(pre_tool_dangerous_commands, monkeypatch, json.dumps(payload))
+        assert exit_code == 0
+        assert output == ""
+
+
+def test_main_blocks_powershell_git_writes(pre_tool_dangerous_commands, monkeypatch) -> None:
+    blocked = "Set-Content .git/config x"
+    payload = {"tool_name": "shell", "tool_input": {"command": blocked}}
+
+    exit_code, output = _run_main(pre_tool_dangerous_commands, monkeypatch, json.dumps(payload))
+    message = json.loads(output)
+
+    assert exit_code == 0
+    assert message["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert blocked in message["hookSpecificOutput"]["permissionDecisionReason"]
+
+
 def test_main_allows_safe_commands(pre_tool_dangerous_commands, monkeypatch) -> None:
     payload = {
         "toolName": "run_command",

@@ -56,6 +56,19 @@ def test_finds_dangerous_command_in_nested_tool_input(
     )
 
 
+def test_matches_protected_git_mutation_commands(pre_tool_dangerous_commands) -> None:
+    values = [
+        "rm -rf .git",
+        "git rm -r .git",
+        "git mv .git/config .git/config.bak",
+        "echo x > .git/config",
+        "Set-Content .git/config x",
+    ]
+
+    for value in values:
+        assert pre_tool_dangerous_commands._matches_protected_git_mutation_command(value) is True
+
+
 def test_ignores_non_string_nested_values(pre_tool_dangerous_commands) -> None:
     payload = {
         "command": [None, 4, False, {"nested": []}],

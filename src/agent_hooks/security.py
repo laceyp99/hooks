@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import PurePath
 from typing import Any
@@ -62,6 +63,32 @@ ALLOWED_GIT_PROJECT_EXACT_NAMES = {
 }
 
 ALLOWED_GIT_PROJECT_PREFIXES = (".github/",)
+
+SHELL_COMMAND_TOOLS = {
+    "bash",
+    "command_execution",
+    "shell",
+    "shell_command",
+    "run_command",
+}
+
+PROTECTED_GIT_MUTATION_PATTERNS = (
+    re.compile(r"(^|[;&|])\s*(?:sudo\s+)?rm\s+-[A-Za-z]*[rf][A-Za-z]*\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|])\s*rmdir\s+/s\s+/q\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|])\s*del(?:\s+/[A-Za-z]+)+\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|])\s*(?:sudo\s+)?Remove-Item\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|])\s*(?:sudo\s+)?Move-Item\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|])\s*(?:sudo\s+)?Rename-Item\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|])\s*(?:sudo\s+)?Copy-Item\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|])\s*(?:sudo\s+)?git\s+rm\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|])\s*(?:sudo\s+)?git\s+mv\b", re.IGNORECASE),
+    re.compile(
+        r"(^|[;&|])\s*(?:sudo\s+)?(?:Set-Content|Add-Content|Out-File|Clear-Content|New-Item)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(^|[;&|])\s*(?:echo|printf|type|cat)\b.*(?:>{1,2}|>>)", re.IGNORECASE),
+    re.compile(r"(^|[;&|])\s*(?:sudo\s+)?(?:mv|cp|tee|tee-object)\b", re.IGNORECASE),
+)
 
 
 def _should_check(tool_name: str) -> bool:
@@ -140,6 +167,22 @@ def _find_protected_git_path(value: Any) -> str | None:
     return match
 
 
+def _matches_protected_git_mutation_command(value: str) -> bool:
+    normalized = value.strip().replace("\\", "/")
+    if not normalized:
+        return False
+
+    if not first_matching_string(normalized, _matches_protected_git_path):
+        return False
+
+    return any(pattern.search(normalized) for pattern in PROTECTED_GIT_MUTATION_PATTERNS)
+
+
+def _find_protected_git_mutation_command(value: Any) -> str | None:
+    match = first_matching_string(value, _matches_protected_git_mutation_command)
+    return match
+
+
 def _emit_block(path: str) -> None:
     payload = {
         "systemMessage": "Human must handle env-like secret files manually.",
@@ -179,6 +222,13 @@ def main() -> int:
     if blocked_git_path:
         _emit_git_block(blocked_git_path)
         return 0
+
+    name, short_name = normalize_tool_name(tool_name)
+    if name in SHELL_COMMAND_TOOLS or short_name in SHELL_COMMAND_TOOLS:
+        blocked_git_command = _find_protected_git_mutation_command(tool_input)
+        if blocked_git_command:
+            _emit_git_block(blocked_git_command)
+            return 0
 
     blocked_path = _find_env_path(tool_input)
     if blocked_path:

@@ -6,6 +6,7 @@ import sys
 from typing import Any
 
 from agent_hooks.common import load_stdin_payload, normalize_tool_name
+from agent_hooks.security import _matches_protected_git_mutation_command
 
 COMMAND_TOOLS = {
     "bash",
@@ -76,7 +77,13 @@ def _find_dangerous_command(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
 
-    return value if _matches_dangerous_command(value) else None
+    if _matches_dangerous_command(value):
+        return value
+
+    if _matches_protected_git_mutation_command(value):
+        return value
+
+    return None
 
 
 def _emit_block(command: str) -> None:

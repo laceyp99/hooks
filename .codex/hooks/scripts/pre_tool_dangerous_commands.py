@@ -7,6 +7,7 @@ from agent_hooks import dangerous_commands as _impl
 _should_check = _impl._should_check
 _normalize_command = _impl._normalize_command
 _matches_dangerous_command = _impl._matches_dangerous_command
+_matches_protected_git_mutation_command = _impl._matches_protected_git_mutation_command
 _find_dangerous_command = _impl._find_dangerous_command
 _emit_block = _impl._emit_block
 
@@ -16,6 +17,7 @@ def main() -> int:
         "_emit_block": _impl._emit_block,
         "_find_dangerous_command": _impl._find_dangerous_command,
         "_matches_dangerous_command": _impl._matches_dangerous_command,
+        "_matches_protected_git_mutation_command": _impl._matches_protected_git_mutation_command,
         "_normalize_command": _impl._normalize_command,
         "_should_check": _impl._should_check,
         "json": _impl.json,
@@ -29,6 +31,7 @@ def main() -> int:
         _impl._should_check = _should_check
         _impl._normalize_command = _normalize_command
         _impl._matches_dangerous_command = _matches_dangerous_command
+        _impl._matches_protected_git_mutation_command = _matches_protected_git_mutation_command
         _impl._find_dangerous_command = _find_dangerous_command
         _impl._emit_block = _emit_block
         return _impl.main()
@@ -38,6 +41,9 @@ def main() -> int:
         _impl._matches_dangerous_command = originals["_matches_dangerous_command"]
         _impl._normalize_command = originals["_normalize_command"]
         _impl._should_check = originals["_should_check"]
+        _impl._matches_protected_git_mutation_command = originals[
+            "_matches_protected_git_mutation_command"
+        ]
         _impl.json = originals["json"]
         _impl.re = originals["re"]
         _impl.sys = originals["sys"]

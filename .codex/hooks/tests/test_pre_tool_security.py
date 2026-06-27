@@ -117,6 +117,24 @@ def test_finds_git_paths_embedded_in_shell_commands(pre_tool_security, git_inter
     assert pre_tool_security._find_protected_git_path(payload) == protected_path
 
 
+def test_finds_protected_git_mutation_commands(pre_tool_security, git_internal_path) -> None:
+    payloads = [
+        {"command": "rm -rf " + git_internal_path()},
+        {"command": "git rm -r " + git_internal_path()},
+        {
+            "command": "git mv "
+            + git_internal_path("config")
+            + " "
+            + git_internal_path("config.bak")
+        },
+        {"command": "echo x > " + git_internal_path("config")},
+        {"command": "Set-Content " + git_internal_path("config") + " x"},
+    ]
+
+    for payload in payloads:
+        assert pre_tool_security._find_protected_git_mutation_command(payload) is not None
+
+
 def test_ignores_non_string_nested_values(pre_tool_security) -> None:
     payload = {
         "paths": [None, 3, {"nested": [False, {"deep": []}]}],
