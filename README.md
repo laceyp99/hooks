@@ -42,12 +42,14 @@ The Ruff opt-in markers are:
 
 ## Local Setup
 
-Think of setup as two separate pieces:
+Think of setup as two separate pieces for Copilot and Codex:
 
 - your **source repo**, which can live anywhere convenient
 - your **installed hook bundle**, which must live in your Windows user profile so Copilot or Codex can find it
 
 The repo copy is where you edit files. The installed bundle is what the hook system actually reads when it runs.
+
+Pi is slightly different: its installed extension is only a TypeScript bridge. The bridge calls back into this source checkout to run the shared Python hooks.
 
 1. Clone or copy this repository to a normal work folder on your machine.
 
@@ -88,14 +90,19 @@ The repo copy is where you edit files. The installed bundle is what the hook sys
    - `hooks.example.json` is the checked-in template; `hooks.json` is your local copy that Codex reads from `%USERPROFILE%\.codex\hooks.json`.
    - This gives Codex the hook registration, the bootstrap script, the wrapper scripts, and the shared `src` folder it needs.
 
-4.  Install the Pi bundle into your user profile. Create the Pi extension directory and copy the bridge into place.
+4. Install the Pi bridge into your user profile. Create the Pi extension directory and copy the bridge into place.
 
    ```powershell
    New-Item -ItemType Directory -Force "$env:USERPROFILE\.pi\agent\extensions" | Out-Null
    Copy-Item -Force ".pi\agent\extensions\agent-hooks.ts" "$env:USERPROFILE\.pi\agent\extensions\agent-hooks.ts"
    ```
 
-5. The wrapper scripts load the shared hook logic from the copied `src/agent_hooks/` folder next to your user-profile bundles.
+   - The Pi bridge expects this source checkout to remain available at `%USERPROFILE%\code\agent-hooks` by default.
+   - If your checkout lives somewhere else, set `AGENT_HOOKS_ROOT` to the checkout path before launching Pi.
+   - If `python.exe` is not on your Windows `PATH`, set `AGENT_HOOKS_PYTHON` to the Python executable Pi should use.
+   - The bridge looks for the checked-in `.codex/hooks/` or `.copilot/hooks/` wrapper bundle inside the source checkout, then runs the shared Python hook logic from there.
+
+5. The Copilot and Codex wrapper scripts load the shared hook logic from the copied `src/agent_hooks/` folder next to your user-profile bundles.
    - You do not need a repo install or manual `PYTHONPATH` for normal hook execution.
    - Keep `src/agent_hooks/` in the source repo so you can refresh the installed copy when you update the hooks.
 
@@ -136,7 +143,7 @@ The repo copy is where you edit files. The installed bundle is what the hook sys
 
 The repo is organized as a small local bundle plus shared logic. Each harness gets its own thin wrapper folder, while the actual hook behavior lives once under `src/agent_hooks/`.
 
-The installed bundles also expect a copied `src/` folder beside `.copilot/hooks/` or `.codex/hooks/` in your Windows user profile so the wrapper scripts can bootstrap themselves before importing the shared hook logic. Pi is different: its installed bridge lives in `~/.pi/agent/extensions/`, but it points back at the source checkout that contains the Python hook code. The layout below shows the source checkout; the installed user-profile copy mirrors the same `hooks/` and `src/` structure, except that Codex reads its local config from `%USERPROFILE%\.codex\hooks.json`.
+The installed Copilot and Codex bundles also expect a copied `src/` folder beside `.copilot/hooks/` or `.codex/hooks/` in your Windows user profile so the wrapper scripts can bootstrap themselves before importing the shared hook logic. Pi is different: its installed bridge lives in `~/.pi/agent/extensions/`, but it points back at this source checkout. By default, the bridge expects the checkout at `~/code/agent-hooks`; set `AGENT_HOOKS_ROOT` if you keep it somewhere else. The layout below shows the source checkout; the installed user-profile copy mirrors the same `hooks/` and `src/` structure for Copilot and Codex, except that Codex reads its local config from `%USERPROFILE%\.codex\hooks.json`.
 
 ```text
 Hooks
@@ -153,7 +160,8 @@ Hooks
 │     ├─ run_hook.py                # Bootstrap that finds a compatible Python and launches one hook script
 │     ├─ scripts/                   # Thin wrappers around shared hook logic
 │     └─ tests/                     # Tests for the Codex bundle
-├─ pi/agent-hooks.ts                # Global Pi extension bridge that calls the Python hooks
+├─ .pi/agent/extensions/
+│  └─ agent-hooks.ts                # Global Pi extension bridge that calls the Python hooks
 ├─ src/agent_hooks/                 # Shared hook logic used by both bundles
 │  ├─ bootstrap.py                  # Shared bootstrap helpers and interpreter selection
 │  ├─ common.py                    # Shared utility helpers
