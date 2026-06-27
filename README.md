@@ -77,7 +77,7 @@ The repo copy is where you edit files. The installed bundle is what the hook sys
 
    ```powershell
    New-Item -ItemType Directory -Force "$env:USERPROFILE\.codex\hooks" | Out-Null
-   Copy-Item -Force ".codex\hooks.example.json" "$env:USERPROFILE\.codex\hooks\hooks.json"
+   Copy-Item -Force ".codex\hooks.example.json" "$env:USERPROFILE\.codex\hooks.json"
    Copy-Item -Force ".codex\hooks\run_hook.py" "$env:USERPROFILE\.codex\hooks\run_hook.py"
    Copy-Item -Recurse -Force ".codex\hooks\scripts" "$env:USERPROFILE\.codex\hooks\scripts"
    Copy-Item -Recurse -Force "src" "$env:USERPROFILE\"
@@ -85,7 +85,7 @@ The repo copy is where you edit files. The installed bundle is what the hook sys
 
    - If the destination folder does not exist yet, the command creates it.
    - On Windows, `%USERPROFILE%` means your personal home folder, such as `C:\Users\YourName`.
-   - `hooks.example.json` is the checked-in template; `hooks.json` is your local copy that you can edit.
+   - `hooks.example.json` is the checked-in template; `hooks.json` is your local copy that Codex reads from `%USERPROFILE%\.codex\hooks.json`.
    - This gives Codex the hook registration, the bootstrap script, the wrapper scripts, and the shared `src` folder it needs.
 
 4. The wrapper scripts load the shared hook logic from the copied `src/agent_hooks/` folder next to your user-profile bundles.
@@ -120,7 +120,8 @@ The repo copy is where you edit files. The installed bundle is what the hook sys
 ## Local Configuration
 
 - Keep `cwd` set to `"."` so repo-aware hooks such as the Ruff cleanup still operate on the active project rather than the hooks bundle.
-- `.copilot/hooks/hooks.json` and `.codex/hooks.json` are the checked-in harness configs for this repo.
+- The repo includes checked-in example configs at `.copilot/hooks/hooks.example.json` and `.codex/hooks.example.json`.
+- The installed local Codex config should live at `%USERPROFILE%\.codex\hooks.json`.
 - The Copilot and Codex JSON files intentionally differ where each harness needs different paths or command syntax.
 - If you clone this repo onto another machine, update the absolute paths in the harness JSON files for that machine.
 
@@ -128,7 +129,7 @@ The repo copy is where you edit files. The installed bundle is what the hook sys
 
 The repo is organized as a small local bundle plus shared logic. Each harness gets its own thin wrapper folder, while the actual hook behavior lives once under `src/agent_hooks/`.
 
-The installed bundles also expect a copied `src/` folder beside `.copilot/hooks/` or `.codex/hooks/` in your Windows user profile so the wrapper scripts can bootstrap themselves before importing the shared hook logic. The layout below shows the source checkout; the installed user-profile copy mirrors the same `hooks/` and `src/` structure.
+The installed bundles also expect a copied `src/` folder beside `.copilot/hooks/` or `.codex/hooks/` in your Windows user profile so the wrapper scripts can bootstrap themselves before importing the shared hook logic. The layout below shows the source checkout; the installed user-profile copy mirrors the same `hooks/` and `src/` structure, except that Codex reads its local config from `%USERPROFILE%\.codex\hooks.json`.
 
 ```text
 Hooks
@@ -141,7 +142,6 @@ Hooks
 │     └─ tests/                     # Tests for the Copilot bundle
 ├─ .codex/
 │  └─ hooks/
-│     ├─ hooks.json                 # Local hook registration used by Codex
 │     ├─ hooks.example.json         # Shareable sample config with user-profile placeholders
 │     ├─ run_hook.py                # Bootstrap that finds a compatible Python and launches one hook script
 │     ├─ scripts/                   # Thin wrappers around shared hook logic
