@@ -290,8 +290,9 @@ function Copy-ManagedBundle {
     }
 
     New-Item -ItemType Directory -Force $DestinationHooksDir | Out-Null
+    New-Item -ItemType Directory -Force (Join-Path $DestinationHooksDir "scripts") | Out-Null
     Copy-Item -Force (Join-Path $SourceHooksDir "run_hook.py") (Join-Path $DestinationHooksDir "run_hook.py")
-    Copy-Item -Recurse -Force (Join-Path $SourceHooksDir "scripts") (Join-Path $DestinationHooksDir "scripts")
+    Copy-Item -Recurse -Force (Join-Path $SourceHooksDir "scripts\*") (Join-Path $DestinationHooksDir "scripts")
     Copy-Item -Recurse -Force (Join-Path $RepoRoot "src") $env:USERPROFILE
     Write-Host "Refreshed managed $Name runtime files."
 }

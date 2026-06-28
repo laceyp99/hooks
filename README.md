@@ -80,7 +80,8 @@ Pi is slightly different: its installed extension is only a TypeScript bridge. T
      Copy-Item ".copilot\hooks\hooks.example.json" "$env:USERPROFILE\.copilot\hooks\hooks.json"
    }
    Copy-Item -Force ".copilot\hooks\run_hook.py" "$env:USERPROFILE\.copilot\hooks\run_hook.py"
-   Copy-Item -Recurse -Force ".copilot\hooks\scripts" "$env:USERPROFILE\.copilot\hooks\scripts"
+   New-Item -ItemType Directory -Force "$env:USERPROFILE\.copilot\hooks\scripts" | Out-Null
+   Copy-Item -Recurse -Force ".copilot\hooks\scripts\*" "$env:USERPROFILE\.copilot\hooks\scripts"
    Copy-Item -Recurse -Force "src" "$env:USERPROFILE\"
    ```
 
@@ -97,7 +98,8 @@ Pi is slightly different: its installed extension is only a TypeScript bridge. T
      Copy-Item ".codex\hooks.example.json" "$env:USERPROFILE\.codex\hooks.json"
    }
    Copy-Item -Force ".codex\hooks\run_hook.py" "$env:USERPROFILE\.codex\hooks\run_hook.py"
-   Copy-Item -Recurse -Force ".codex\hooks\scripts" "$env:USERPROFILE\.codex\hooks\scripts"
+   New-Item -ItemType Directory -Force "$env:USERPROFILE\.codex\hooks\scripts" | Out-Null
+   Copy-Item -Recurse -Force ".codex\hooks\scripts\*" "$env:USERPROFILE\.codex\hooks\scripts"
    Copy-Item -Recurse -Force "src" "$env:USERPROFILE\"
    ```
 
