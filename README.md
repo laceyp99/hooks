@@ -1,6 +1,6 @@
 # Agent Hooks
 
-This repository contains local hook scripts for coding agents. The hooks act as guardrails for safety and repo hygiene while you work. The checked-in Copilot and Codex configs show how to wire the scripts into each harness on your machine.
+This repository contains local hook scripts for coding agents. The hooks act as guardrails for safety and repo hygiene while you work.
 
 ## Hook Behavior
 
@@ -60,11 +60,25 @@ Pi is slightly different: its installed extension is only a TypeScript bridge. T
 
    If you already have the repo checked out, just open a terminal in that folder.
 
-2. Install the Copilot bundle into your user profile, then create your local `hooks.json` from the example file.
+2. Run the Windows installer from the repo checkout.
+
+   ```powershell
+   .\install.ps1
+   ```
+
+   The installer prompts before merging into existing Copilot or Codex hook config files. It only adds this repo's missing hook entries and preserves existing matching hook entries as-is. If it needs to write an existing config file, it first creates a timestamped `.bak-*` backup next to that file.
+
+   The installer refreshes the managed runtime files for Copilot and Codex when you confirm those prompts. Those managed files are `run_hook.py`, the wrapper `scripts/` folders, and the shared `src/` folder copied into your Windows user profile.
+
+   The installer can also install the Pi bridge extension. It creates `%USERPROFILE%\.pi\agent\extensions\` if needed and copies `agent-hooks.ts` only when that destination file does not already exist.
+
+3. Manual fallback: install the Copilot bundle into your user profile, then create your local `hooks.json` from the example file only if one does not already exist.
 
    ```powershell
    New-Item -ItemType Directory -Force "$env:USERPROFILE\.copilot\hooks" | Out-Null
-   Copy-Item -Force ".copilot\hooks\hooks.example.json" "$env:USERPROFILE\.copilot\hooks\hooks.json"
+   if (-not (Test-Path "$env:USERPROFILE\.copilot\hooks\hooks.json")) {
+     Copy-Item ".copilot\hooks\hooks.example.json" "$env:USERPROFILE\.copilot\hooks\hooks.json"
+   }
    Copy-Item -Force ".copilot\hooks\run_hook.py" "$env:USERPROFILE\.copilot\hooks\run_hook.py"
    Copy-Item -Recurse -Force ".copilot\hooks\scripts" "$env:USERPROFILE\.copilot\hooks\scripts"
    Copy-Item -Recurse -Force "src" "$env:USERPROFILE\"
@@ -75,11 +89,13 @@ Pi is slightly different: its installed extension is only a TypeScript bridge. T
    - `hooks.example.json` is the checked-in template; `hooks.json` is your local copy that you can edit.
    - This gives Copilot the hook registration, the bootstrap script, the wrapper scripts, and the shared `src` folder it needs.
 
-3. Install the Codex bundle into your user profile, then create your local `hooks.json` from the example file.
+4. Manual fallback: install the Codex bundle into your user profile, then create your local `hooks.json` from the example file only if one does not already exist.
 
    ```powershell
    New-Item -ItemType Directory -Force "$env:USERPROFILE\.codex\hooks" | Out-Null
-   Copy-Item -Force ".codex\hooks.example.json" "$env:USERPROFILE\.codex\hooks.json"
+   if (-not (Test-Path "$env:USERPROFILE\.codex\hooks.json")) {
+     Copy-Item ".codex\hooks.example.json" "$env:USERPROFILE\.codex\hooks.json"
+   }
    Copy-Item -Force ".codex\hooks\run_hook.py" "$env:USERPROFILE\.codex\hooks\run_hook.py"
    Copy-Item -Recurse -Force ".codex\hooks\scripts" "$env:USERPROFILE\.codex\hooks\scripts"
    Copy-Item -Recurse -Force "src" "$env:USERPROFILE\"
@@ -90,11 +106,13 @@ Pi is slightly different: its installed extension is only a TypeScript bridge. T
    - `hooks.example.json` is the checked-in template; `hooks.json` is your local copy that Codex reads from `%USERPROFILE%\.codex\hooks.json`.
    - This gives Codex the hook registration, the bootstrap script, the wrapper scripts, and the shared `src` folder it needs.
 
-4. Install the Pi bridge into your user profile. Create the Pi extension directory and copy the bridge into place.
+5. Manual fallback: install the Pi bridge into your user profile. Create the Pi extension directory and copy the bridge into place only if one does not already exist.
 
    ```powershell
    New-Item -ItemType Directory -Force "$env:USERPROFILE\.pi\agent\extensions" | Out-Null
-   Copy-Item -Force ".pi\agent\extensions\agent-hooks.ts" "$env:USERPROFILE\.pi\agent\extensions\agent-hooks.ts"
+   if (-not (Test-Path "$env:USERPROFILE\.pi\agent\extensions\agent-hooks.ts")) {
+     Copy-Item ".pi\agent\extensions\agent-hooks.ts" "$env:USERPROFILE\.pi\agent\extensions\agent-hooks.ts"
+   }
    ```
 
    - The Pi bridge expects this source checkout to remain available at `%USERPROFILE%\code\agent-hooks` by default.
@@ -102,29 +120,29 @@ Pi is slightly different: its installed extension is only a TypeScript bridge. T
    - If `python.exe` is not on your Windows `PATH`, set `AGENT_HOOKS_PYTHON` to the Python executable Pi should use.
    - The bridge looks for the checked-in `.codex/hooks/` or `.copilot/hooks/` wrapper bundle inside the source checkout, then runs the shared Python hook logic from there.
 
-5. The Copilot and Codex wrapper scripts load the shared hook logic from the copied `src/agent_hooks/` folder next to your user-profile bundles.
+6. The Copilot and Codex wrapper scripts load the shared hook logic from the copied `src/agent_hooks/` folder next to your user-profile bundles.
    - You do not need a repo install or manual `PYTHONPATH` for normal hook execution.
    - Keep `src/agent_hooks/` in the source repo so you can refresh the installed copy when you update the hooks.
 
-6. If you want the hooks to reuse a project’s dependencies, create a virtual environment in that project.
+7. If you want the hooks to reuse a project’s dependencies, create a virtual environment in that project.
 
    ```bash
    python -m venv venv
    ```
 
-7. Optional for development: install the repo’s test and lint tools in a working checkout.
+8. Optional for development: install the repo’s test and lint tools in a working checkout.
 
    ```bash
    python -m pip install -e ".[dev]"
    ```
 
-8. Run the test suite from the repo checkout.
+9. Run the test suite from the repo checkout.
 
    ```bash
    pytest -q --import-mode=importlib
    ```
 
-9. Run lint and format checks when you are changing code.
+10. Run lint and format checks when you are changing code.
 
    ```bash
    python -m ruff check .
