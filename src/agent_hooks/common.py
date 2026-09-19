@@ -19,6 +19,7 @@ FILE_TARGET_FIELD_NAMES = frozenset(
         "filepath",
         "filename",
         "new_path",
+        "notebook_path",
         "old_path",
         "path",
         "paths",

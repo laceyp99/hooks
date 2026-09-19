@@ -157,3 +157,29 @@ def test_inspects_patch_targets_but_not_patch_body(pre_tool_security) -> None:
         pre_tool_security._find_protected_git_path({"patch": blocked_patch})
         == ".github/../.git/config"
     )
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "checked", "mutating"),
+    [
+        ("Bash", True, False),
+        ("Read", True, False),
+        ("Edit", True, True),
+        ("MultiEdit", True, True),
+        ("Write", True, True),
+        ("NotebookEdit", True, True),
+        ("Glob", False, False),
+        ("Grep", False, False),
+    ],
+)
+def test_claude_code_tool_names_are_recognized(
+    pre_tool_security, tool_name: str, checked: bool, mutating: bool
+) -> None:
+    assert pre_tool_security._should_check(tool_name) is checked
+    assert pre_tool_security._should_check_git_paths(tool_name) is mutating
+
+
+def test_notebook_path_is_a_file_target(pre_tool_security, git_internal_path) -> None:
+    payload = {"notebook_path": git_internal_path("config"), "new_source": "print(1)"}
+
+    assert pre_tool_security._find_protected_git_path(payload) == git_internal_path("config")

@@ -1,0 +1,44 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|MultiEdit|Write|NotebookEdit|Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$HOME/.claude/hooks/run_hook.py\" \"$HOME/.claude/hooks/scripts/pre_tool_security.py\"",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "python \"$HOME/.claude/hooks/run_hook.py\" \"$HOME/.claude/hooks/scripts/pre_tool_dangerous_commands.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$HOME/.claude/hooks/run_hook.py\" \"$HOME/.claude/hooks/scripts/post_tool_cleaner.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$HOME/.claude/hooks/run_hook.py\" \"$HOME/.claude/hooks/scripts/session_stop.py\"",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 # Agent Hooks
 
-This repository contains local hook scripts for coding agents. The hooks act as guardrails for safety and repo hygiene while you work.
+This repository contains local hook scripts for coding agents. The hooks act as guardrails for safety and repo hygiene while you work. The same Python hook logic is shared by three harnesses: Claude Code, Codex, and Pi.
 
 ## Hook Behavior
 
@@ -48,10 +48,10 @@ The Ruff opt-in markers are:
 
 ## Local Setup
 
-Think of setup as two separate pieces for Copilot and Codex:
+Think of setup as two separate pieces for Claude Code and Codex:
 
 - your **source repo**, which can live anywhere convenient
-- your **installed hook bundle**, which must live in your Windows user profile so Copilot or Codex can find it
+- your **installed hook bundle**, which must live in your Windows user profile so Claude Code or Codex can find it
 
 The repo copy is where you edit files. The installed bundle is what the hook system actually reads when it runs.
 
@@ -72,29 +72,31 @@ Pi is slightly different: its installed extension is only a TypeScript bridge. T
    .\install.ps1
    ```
 
-   The installer prompts before merging into existing Copilot or Codex hook config files. It only adds this repo's missing hook entries and preserves existing matching hook entries as-is. If it needs to write an existing config file, it first creates a timestamped `.bak-*` backup next to that file.
+   The installer prompts before merging into existing Claude Code or Codex hook config files. It only adds this repo's missing hook entries and preserves existing matching hook entries as-is. For Claude Code it touches only the `hooks` key of `settings.json`; every other setting is left alone. If it needs to write an existing config file, it first creates a timestamped `.bak-*` backup next to that file.
 
-   The installer refreshes the managed runtime files for Copilot and Codex when you confirm those prompts. Those managed files are `run_hook.py`, the wrapper `scripts/` folders, and the shared `src/` folder copied into your Windows user profile.
+   The installer refreshes the managed runtime files for Claude Code and Codex when you confirm those prompts. Those managed files are `run_hook.py`, the wrapper `scripts/` folders, and the shared `src/` folder copied into your Windows user profile.
 
    The installer also treats the Pi bridge extension as a managed runtime file. When you confirm that prompt it creates `%USERPROFILE%\.pi\agent\extensions\` if needed and installs `agent-hooks.ts`. If a bridge already exists and differs from the checked-in copy, the installer backs it up to a timestamped `.bak-*` file and replaces it; an identical bridge is left untouched.
 
-3. Manual fallback: install the Copilot bundle into your user profile, then create your local `hooks.json` from the example file only if one does not already exist.
+3. Manual fallback: install the Claude Code bundle into your user profile, then create your local `settings.json` from the example file only if one does not already exist. If you already have a `%USERPROFILE%\.claude\settings.json`, copy the `hooks` block from `.claude\settings.example.json` into it instead of overwriting the file.
 
    ```powershell
-   New-Item -ItemType Directory -Force "$env:USERPROFILE\.copilot\hooks" | Out-Null
-   if (-not (Test-Path "$env:USERPROFILE\.copilot\hooks\hooks.json")) {
-     Copy-Item ".copilot\hooks\hooks.example.json" "$env:USERPROFILE\.copilot\hooks\hooks.json"
+   New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\hooks" | Out-Null
+   if (-not (Test-Path "$env:USERPROFILE\.claude\settings.json")) {
+     Copy-Item ".claude\settings.example.json" "$env:USERPROFILE\.claude\settings.json"
    }
-   Copy-Item -Force ".copilot\hooks\run_hook.py" "$env:USERPROFILE\.copilot\hooks\run_hook.py"
-   New-Item -ItemType Directory -Force "$env:USERPROFILE\.copilot\hooks\scripts" | Out-Null
-   Copy-Item -Recurse -Force ".copilot\hooks\scripts\*" "$env:USERPROFILE\.copilot\hooks\scripts"
+   Copy-Item -Force ".claude\hooks\run_hook.py" "$env:USERPROFILE\.claude\hooks\run_hook.py"
+   New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\hooks\scripts" | Out-Null
+   Copy-Item -Recurse -Force ".claude\hooks\scripts\*" "$env:USERPROFILE\.claude\hooks\scripts"
    Copy-Item -Recurse -Force "src" "$env:USERPROFILE\"
    ```
 
    - If the destination folder does not exist yet, the command creates it.
    - On Windows, `%USERPROFILE%` means your personal home folder, such as `C:\Users\YourName`.
-   - `hooks.example.json` is the checked-in template; `hooks.json` is your local copy that you can edit.
-   - This gives Copilot the hook registration, the bootstrap script, the wrapper scripts, and the shared `src` folder it needs.
+   - `settings.example.json` is the checked-in template; `settings.json` is Claude Code's user settings file, which you can edit.
+   - Claude Code runs hook commands through a shell, so the example commands reference `$HOME`. On Windows that resolves to your user profile under Git Bash.
+   - The PreToolUse hooks match `Bash`, `Edit`, `MultiEdit`, `Write`, `NotebookEdit`, and `Read`; the PostToolUse cleaner matches the editing tools; the Stop hook runs on every stop.
+   - This gives Claude Code the hook registration, the bootstrap script, the wrapper scripts, and the shared `src` folder it needs.
 
 4. Manual fallback: install the Codex bundle into your user profile, then create your local `hooks.json` from the example file only if one does not already exist.
 
@@ -124,9 +126,9 @@ Pi is slightly different: its installed extension is only a TypeScript bridge. T
    - The Pi bridge expects this source checkout to remain available at `%USERPROFILE%\code\agent-hooks` by default.
    - If your checkout lives somewhere else, set `AGENT_HOOKS_ROOT` to the checkout path before launching Pi.
    - If `python.exe` is not on your Windows `PATH`, set `AGENT_HOOKS_PYTHON` to the Python executable Pi should use.
-   - The bridge looks for the checked-in `.codex/hooks/` or `.copilot/hooks/` wrapper bundle inside the source checkout, then runs the shared Python hook logic from there.
+   - The bridge looks for the checked-in `.codex/hooks/` or `.claude/hooks/` wrapper bundle inside the source checkout, then runs the shared Python hook logic from there.
 
-6. The Copilot and Codex wrapper scripts load the shared hook logic from the copied `src/agent_hooks/` folder next to your user-profile bundles.
+6. The Claude Code and Codex wrapper scripts load the shared hook logic from the copied `src/agent_hooks/` folder next to your user-profile bundles.
    - You do not need a repo install or manual `PYTHONPATH` for normal hook execution.
    - Keep `src/agent_hooks/` in the source repo so you can refresh the installed copy when you update the hooks.
 
@@ -158,26 +160,26 @@ Pi is slightly different: its installed extension is only a TypeScript bridge. T
 ## Local Configuration
 
 - Keep `cwd` set to `"."` so repo-aware hooks such as the Ruff cleanup still operate on the active project rather than the hooks bundle.
-- The repo includes checked-in example configs at `.copilot/hooks/hooks.example.json` and `.codex/hooks.example.json`.
+- The repo includes checked-in example configs at `.claude/settings.example.json` and `.codex/hooks.example.json`.
+- The installed local Claude Code config is the `hooks` key of `%USERPROFILE%\.claude\settings.json`.
 - The installed local Codex config should live at `%USERPROFILE%\.codex\hooks.json`.
-- The Copilot and Codex JSON files intentionally differ where each harness needs different paths or command syntax.
+- The Claude Code and Codex JSON files intentionally differ where each harness needs different paths or command syntax.
 - If you clone this repo onto another machine, update the absolute paths in the harness JSON files for that machine.
 
 ## Repository Layout
 
 The repo is organized as a small local bundle plus shared logic. Each harness gets its own thin wrapper folder, while the actual hook behavior lives once under `src/agent_hooks/`.
 
-The installed Copilot and Codex bundles also expect a copied `src/` folder beside `.copilot/hooks/` or `.codex/hooks/` in your Windows user profile so the wrapper scripts can bootstrap themselves before importing the shared hook logic. Pi is different: its installed bridge lives in `~/.pi/agent/extensions/`, but it points back at this source checkout. By default, the bridge expects the checkout at `~/code/agent-hooks`; set `AGENT_HOOKS_ROOT` if you keep it somewhere else. The layout below shows the source checkout; the installed user-profile copy mirrors the same `hooks/` and `src/` structure for Copilot and Codex, except that Codex reads its local config from `%USERPROFILE%\.codex\hooks.json`.
+The installed Claude Code and Codex bundles also expect a copied `src/` folder beside `.claude/hooks/` or `.codex/hooks/` in your Windows user profile so the wrapper scripts can bootstrap themselves before importing the shared hook logic. Pi is different: its installed bridge lives in `~/.pi/agent/extensions/`, but it points back at this source checkout. By default, the bridge expects the checkout at `~/code/agent-hooks`; set `AGENT_HOOKS_ROOT` if you keep it somewhere else. The layout below shows the source checkout; the installed user-profile copy mirrors the same `hooks/` and `src/` structure for Claude Code and Codex. Claude Code reads its hook registration from `%USERPROFILE%\.claude\settings.json`, and Codex reads its local config from `%USERPROFILE%\.codex\hooks.json`.
 
 ```text
 Hooks
-├─ .copilot/
+├─ .claude/
+│  ├─ settings.example.json         # Shareable sample Claude Code settings with the hooks block
 │  └─ hooks/
-│     ├─ hooks.json                 # Local hook registration used by Copilot
-│     ├─ hooks.example.json         # Shareable sample config with user-profile placeholders
 │     ├─ run_hook.py                # Bootstrap that finds a compatible Python and launches one hook script
 │     ├─ scripts/                   # Thin wrappers around shared hook logic
-│     └─ tests/                     # Tests for the Copilot bundle
+│     └─ tests/                     # Tests for the Claude Code bundle
 ├─ .codex/
 │  └─ hooks/
 │     ├─ hooks.example.json         # Shareable sample config with user-profile placeholders
@@ -186,7 +188,7 @@ Hooks
 │     └─ tests/                     # Tests for the Codex bundle
 ├─ .pi/agent/extensions/
 │  └─ agent-hooks.ts                # Global Pi extension bridge that calls the Python hooks
-├─ src/agent_hooks/                 # Shared hook logic used by both bundles
+├─ src/agent_hooks/                 # Shared hook logic used by every bundle
 │  ├─ bootstrap.py                  # Shared bootstrap helpers and interpreter selection
 │  ├─ common.py                    # Shared utility helpers
 │  ├─ dangerous_commands.py        # Dangerous-command detection
@@ -198,7 +200,7 @@ Hooks
 └─ README.md                       # This guide
 ```
 
-The Copilot and Codex bundles do not need to be perfectly symmetric. They just need to work with the command formats and install locations required by each harness.
+The Claude Code and Codex bundles do not need to be perfectly symmetric. They just need to work with the command formats and install locations required by each harness.
 
 ## Validation
 

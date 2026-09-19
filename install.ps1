@@ -94,66 +94,32 @@ function Ensure-Property {
     }
 }
 
-function Merge-CopilotConfig {
-    param(
-        [Parameter(Mandatory = $true)]
-        [object] $Existing,
-
-        [Parameter(Mandatory = $true)]
-        [object] $Template
-    )
-
-    $changed = $false
-    Ensure-Property -Object $Existing -Name "version" -Value $Template.version
-    Ensure-Property -Object $Existing -Name "hooks" -Value ([pscustomobject]@{})
-
-    foreach ($eventName in $Template.hooks.PSObject.Properties.Name) {
-        $templateHooks = @($Template.hooks.$eventName)
-        if (-not ($Existing.hooks.PSObject.Properties.Name -contains $eventName)) {
-            $Existing.hooks | Add-Member -NotePropertyName $eventName -NotePropertyValue @()
-        }
-
-        $existingHooks = @($Existing.hooks.$eventName)
-        foreach ($templateHook in $templateHooks) {
-            $scriptName = $ManagedScripts | Where-Object { Test-HookContainsScript -Hook $templateHook -ScriptName $_ } | Select-Object -First 1
-            if (-not $scriptName) {
-                continue
-            }
-
-            $alreadyInstalled = $existingHooks | Where-Object { Test-HookContainsScript -Hook $_ -ScriptName $scriptName } | Select-Object -First 1
-            if ($alreadyInstalled) {
-                continue
-            }
-
-            $existingHooks += $templateHook
-            $changed = $true
-            Write-Host "Added Copilot $eventName hook for $scriptName"
-        }
-
-        $Existing.hooks.$eventName = $existingHooks
-    }
-
-    return $changed
-}
-
-function Find-CodexContainerForTemplate {
+# Returns the existing container whose matcher equals the template's, so merged hooks keep the
+# tool coverage the template declares. A template with a matcher never merges into a container
+# with a different matcher; a template without a matcher only reuses a matcher-less container.
+function Find-ContainerForTemplate {
     param(
         [object[]] $ExistingContainers,
         [object] $TemplateContainer
     )
 
-    if ($TemplateContainer.PSObject.Properties.Name -contains "matcher") {
-        $matching = $ExistingContainers |
-            Where-Object { ($_.PSObject.Properties.Name -contains "matcher") -and $_.matcher -eq $TemplateContainer.matcher } |
-            Select-Object -First 1
-        if ($matching) {
-            return $matching
+    $templateHasMatcher = $TemplateContainer.PSObject.Properties.Name -contains "matcher"
+    foreach ($container in $ExistingContainers) {
+        if (-not ($container.PSObject.Properties.Name -contains "hooks")) {
+            continue
+        }
+
+        $containerHasMatcher = $container.PSObject.Properties.Name -contains "matcher"
+        if ($templateHasMatcher -and $containerHasMatcher -and $container.matcher -eq $TemplateContainer.matcher) {
+            return $container
+        }
+
+        if (-not $templateHasMatcher -and -not $containerHasMatcher) {
+            return $container
         }
     }
 
-    return $ExistingContainers |
-        Where-Object { $_.PSObject.Properties.Name -contains "hooks" } |
-        Select-Object -First 1
+    return $null
 }
 
 function Get-CodexContainerHooks {
@@ -169,13 +135,18 @@ function Get-CodexContainerHooks {
     return @($Container.hooks)
 }
 
-function Merge-CodexConfig {
+# Merges hook containers shaped like { "hooks": { "<Event>": [ { "matcher": ..., "hooks": [...] } ] } }.
+# Both Codex (%USERPROFILE%\.codex\hooks.json) and Claude Code (%USERPROFILE%\.claude\settings.json)
+# use this layout.
+function Merge-ContainerConfig {
     param(
         [Parameter(Mandatory = $true)]
         [object] $Existing,
 
         [Parameter(Mandatory = $true)]
-        [object] $Template
+        [object] $Template,
+
+        [string] $Name = "hook"
     )
 
     $changed = $false
@@ -205,14 +176,14 @@ function Merge-CodexConfig {
                 }
 
                 $missingHooks += $templateHook
-                Write-Host "Added Codex $eventName hook for $scriptName"
+                Write-Host "Added $Name $eventName hook for $scriptName"
             }
 
             if ($missingHooks.Count -eq 0) {
                 continue
             }
 
-            $targetContainer = Find-CodexContainerForTemplate -ExistingContainers $existingContainers -TemplateContainer $templateContainer
+            $targetContainer = Find-ContainerForTemplate -ExistingContainers $existingContainers -TemplateContainer $templateContainer
             if ($targetContainer) {
                 $targetHooks = @($targetContainer.hooks)
                 $targetContainer.hooks = @($targetHooks + $missingHooks)
@@ -260,7 +231,7 @@ function Install-Config {
 
     $existing = Read-JsonFile -Path $DestinationPath
     $template = Read-JsonFile -Path $TemplatePath
-    $changed = & $Merge $existing $template
+    $changed = & $Merge $existing $template $Name
 
     if (-not $changed) {
         Write-Host "$Name config already has the Agent Hooks entries."
@@ -332,26 +303,28 @@ function Install-PiBridge {
     Write-Host "Refreshed Pi bridge extension at $DestinationPath"
 }
 
-$copilotHooksDir = Join-Path $env:USERPROFILE ".copilot\hooks"
+$claudeHooksDir = Join-Path $env:USERPROFILE ".claude\hooks"
 $codexHooksDir = Join-Path $env:USERPROFILE ".codex\hooks"
 $piExtensionPath = Join-Path $env:USERPROFILE ".pi\agent\extensions\agent-hooks.ts"
 
+# Claude Code reads hooks from its user settings file. Only the "hooks" key is managed here;
+# every other setting in an existing settings.json is preserved.
 Install-Config `
-    -Name "Copilot" `
-    -TemplatePath (Join-Path $RepoRoot ".copilot\hooks\hooks.example.json") `
-    -DestinationPath (Join-Path $copilotHooksDir "hooks.json") `
-    -Merge ${function:Merge-CopilotConfig}
+    -Name "Claude Code" `
+    -TemplatePath (Join-Path $RepoRoot ".claude\settings.example.json") `
+    -DestinationPath (Join-Path $env:USERPROFILE ".claude\settings.json") `
+    -Merge ${function:Merge-ContainerConfig}
 
 Copy-ManagedBundle `
-    -Name "Copilot" `
-    -SourceHooksDir (Join-Path $RepoRoot ".copilot\hooks") `
-    -DestinationHooksDir $copilotHooksDir
+    -Name "Claude Code" `
+    -SourceHooksDir (Join-Path $RepoRoot ".claude\hooks") `
+    -DestinationHooksDir $claudeHooksDir
 
 Install-Config `
     -Name "Codex" `
     -TemplatePath (Join-Path $RepoRoot ".codex\hooks.example.json") `
     -DestinationPath (Join-Path $env:USERPROFILE ".codex\hooks.json") `
-    -Merge ${function:Merge-CodexConfig}
+    -Merge ${function:Merge-ContainerConfig}
 
 Copy-ManagedBundle `
     -Name "Codex" `

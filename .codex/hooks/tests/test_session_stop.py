@@ -173,3 +173,17 @@ def test_changed_python_files_is_empty_outside_git(stop_hook, monkeypatch, tmp_p
     monkeypatch.setattr(stop_hook._impl, "_run", lambda command: (128, "", "fatal: not a git repo"))
 
     assert stop_hook._changed_python_files(tmp_path) == []
+
+
+def test_block_payload_exposes_decision_for_every_harness(stop_hook, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(stop_hook, "_changed_python_files", lambda root: [])
+    results = iter([(1, "E501 too long", ""), (0, "", "")])
+    monkeypatch.setattr(stop_hook, "_run", lambda command: next(results))
+
+    assert stop_hook.main() == 0
+    message = json.loads(capsys.readouterr().out)
+    # Claude Code reads the top-level keys; Codex and the Pi bridge read hookSpecificOutput.
+    assert message["decision"] == "block"
+    assert "E501 too long" in message["reason"]
+    assert message["hookSpecificOutput"]["decision"] == "block"
+    assert message["hookSpecificOutput"]["reason"] == message["reason"]

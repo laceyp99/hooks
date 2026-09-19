@@ -50,6 +50,8 @@ FILE_ACCESS_TOOLS = {
     "edit",
     "edit_tool",
     "move_file",
+    "multiedit",
+    "notebookedit",
     "read",
     "read_file",
     "rename",
@@ -59,6 +61,7 @@ FILE_ACCESS_TOOLS = {
 }
 
 MUTATING_FILE_TOOLS = FILE_ACCESS_TOOLS - {
+    "read",
     "read_file",
     "bash",
     "shell",

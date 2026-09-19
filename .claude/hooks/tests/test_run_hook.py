@@ -10,7 +10,7 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-COPILOT_BUNDLE_ROOT = REPO_ROOT / ".copilot" / "hooks"
+CLAUDE_BUNDLE_ROOT = REPO_ROOT / ".claude" / "hooks"
 REPO_SRC = REPO_ROOT / "src"
 
 
@@ -203,11 +203,11 @@ def test_run_hook_imports_from_a_copied_bundle_without_repo_src_on_sys_path(
     tmp_path,
 ) -> None:
     bundle_root = tmp_path / "bundle"
-    hooks_dir = bundle_root / ".copilot" / "hooks"
+    hooks_dir = bundle_root / ".claude" / "hooks"
     src_dir = bundle_root / "src" / "agent_hooks"
     hooks_dir.mkdir(parents=True)
     src_dir.mkdir(parents=True)
-    shutil.copy2(COPILOT_BUNDLE_ROOT / "run_hook.py", hooks_dir / "run_hook.py")
+    shutil.copy2(CLAUDE_BUNDLE_ROOT / "run_hook.py", hooks_dir / "run_hook.py")
     shutil.copy2(REPO_SRC / "agent_hooks" / "bootstrap.py", src_dir / "bootstrap.py")
     (src_dir / "__init__.py").write_text("", encoding="utf-8")
 

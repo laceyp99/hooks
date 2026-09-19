@@ -19,8 +19,12 @@ def _run(command: list[str]) -> tuple[int, str, str]:
 
 
 def _emit_block(reason: str) -> None:
+    # Claude Code reads ``decision``/``reason`` at the top level; Codex and the Pi bridge read
+    # them from ``hookSpecificOutput``. Emit both so one payload serves every harness.
     payload = {
         "systemMessage": "Ruff reports issues at session stop.",
+        "decision": "block",
+        "reason": reason,
         "hookSpecificOutput": {
             "hookEventName": "Stop",
             "decision": "block",
