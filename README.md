@@ -35,9 +35,9 @@ The cleaner only reads file paths from the tool's target fields (`path`, `file_p
 
 The session-stop hook runs a repo-wide Ruff check at the end of a session. It first checks whether the repo advertises Ruff support and silently skips repos that do not.
 
-By default the hook is check-only: it runs `ruff check .` and `ruff format --check .` and blocks the stop with the findings if either reports problems. It does not rewrite any files.
+By default the hook first runs `ruff check --fix` and `ruff format` on the Python files that `git status` reports as changed in the working tree, so automatic fixes stay scoped to the session's own edits. It then runs `ruff check .` and `ruff format --check .` across the repo and blocks the stop with the findings if either still reports problems.
 
-To let the hook apply fixes automatically, set `AGENT_HOOKS_STOP_FIX=1` (or `true`, `yes`, `on`) in the environment the agent runs in. With that opt-in the hook runs `ruff check --fix` and `ruff format` only on Python files that `git status` reports as changed in the working tree, then performs the same repo-wide check.
+To make the hook check-only, set `AGENT_HOOKS_STOP_FIX=0` (or `false`, `no`, `off`) in the environment the agent runs in. In that mode the hook never rewrites files and the block reason tells the agent that automatic fixes are disabled.
 
 The Ruff opt-in markers are:
 

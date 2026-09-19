@@ -24,7 +24,8 @@ def test_main_skips_when_repo_does_not_use_ruff(stop_hook, monkeypatch, capsys) 
     assert capsys.readouterr().out == ""
 
 
-def test_main_is_check_only_by_default(stop_hook, monkeypatch, capsys) -> None:
+def test_main_fixes_changed_files_by_default(stop_hook, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(stop_hook, "_changed_python_files", lambda root: ["pkg/a.py"])
     calls = []
 
     def _fake_run(command):
@@ -32,20 +33,21 @@ def test_main_is_check_only_by_default(stop_hook, monkeypatch, capsys) -> None:
         return 0, "", ""
 
     monkeypatch.setattr(stop_hook, "_run", _fake_run)
-    monkeypatch.setattr(
-        stop_hook, "_changed_python_files", lambda root: pytest.fail("git must not run")
-    )
 
     assert stop_hook.main() == 0
     assert capsys.readouterr().out == ""
     assert calls == [
+        _ruff(stop_hook, "check", "--fix", "pkg/a.py"),
+        _ruff(stop_hook, "format", "pkg/a.py"),
         _ruff(stop_hook, "check", "."),
         _ruff(stop_hook, "format", "--check", "."),
     ]
-    assert not any("--fix" in command for command in calls)
 
 
-def test_main_blocks_when_a_check_fails_and_explains_opt_in(stop_hook, monkeypatch, capsys) -> None:
+def test_main_blocks_when_a_check_fails_and_explains_opt_out(
+    stop_hook, monkeypatch, capsys
+) -> None:
+    monkeypatch.setenv(stop_hook.STOP_FIX_ENV_VAR, "0")
     results = iter([(1, "line 1: failure", ""), (0, "", "")])
     monkeypatch.setattr(stop_hook, "_run", lambda command: next(results))
 
@@ -60,6 +62,7 @@ def test_main_blocks_when_a_check_fails_and_explains_opt_in(stop_hook, monkeypat
 
 
 def test_main_blocks_when_format_check_fails(stop_hook, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(stop_hook, "_changed_python_files", lambda root: [])
     results = iter([(0, "", ""), (1, "Would reformat: a.py", "")])
     monkeypatch.setattr(stop_hook, "_run", lambda command: next(results))
 
@@ -70,8 +73,8 @@ def test_main_blocks_when_format_check_fails(stop_hook, monkeypatch, capsys) -> 
     assert "Would reformat: a.py" in message["hookSpecificOutput"]["reason"]
 
 
-@pytest.mark.parametrize("value", ["1", "true", "YES", " on "])
-def test_opt_in_fixes_only_changed_files_then_checks(
+@pytest.mark.parametrize("value", ["1", "true", "YES", " on ", "anything"])
+def test_truthy_values_fix_only_changed_files_then_checks(
     stop_hook, monkeypatch, capsys, value: str
 ) -> None:
     monkeypatch.setenv(stop_hook.STOP_FIX_ENV_VAR, value)
@@ -94,9 +97,12 @@ def test_opt_in_fixes_only_changed_files_then_checks(
     ]
 
 
-@pytest.mark.parametrize("value", ["0", "false", "", "no"])
-def test_falsy_opt_in_values_stay_check_only(stop_hook, monkeypatch, value: str) -> None:
+@pytest.mark.parametrize("value", ["0", "false", "NO", " off "])
+def test_opt_out_values_make_stop_check_only(stop_hook, monkeypatch, value: str) -> None:
     monkeypatch.setenv(stop_hook.STOP_FIX_ENV_VAR, value)
+    monkeypatch.setattr(
+        stop_hook, "_changed_python_files", lambda root: pytest.fail("git must not run")
+    )
     calls = []
 
     def _fake_run(command):
@@ -110,10 +116,10 @@ def test_falsy_opt_in_values_stay_check_only(stop_hook, monkeypatch, value: str)
         _ruff(stop_hook, "check", "."),
         _ruff(stop_hook, "format", "--check", "."),
     ]
+    assert not any("--fix" in command for command in calls)
 
 
-def test_opt_in_without_changed_files_never_runs_fixers(stop_hook, monkeypatch) -> None:
-    monkeypatch.setenv(stop_hook.STOP_FIX_ENV_VAR, "1")
+def test_no_changed_files_never_runs_fixers(stop_hook, monkeypatch) -> None:
     monkeypatch.setattr(stop_hook, "_changed_python_files", lambda root: [])
     calls = []
 
@@ -130,8 +136,7 @@ def test_opt_in_without_changed_files_never_runs_fixers(stop_hook, monkeypatch) 
     ]
 
 
-def test_opt_in_block_reason_omits_opt_in_hint(stop_hook, monkeypatch, capsys) -> None:
-    monkeypatch.setenv(stop_hook.STOP_FIX_ENV_VAR, "1")
+def test_default_block_reason_omits_opt_out_hint(stop_hook, monkeypatch, capsys) -> None:
     monkeypatch.setattr(stop_hook, "_changed_python_files", lambda root: [])
     results = iter([(1, "still failing", ""), (0, "", "")])
     monkeypatch.setattr(stop_hook, "_run", lambda command: next(results))

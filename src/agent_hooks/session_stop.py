@@ -8,9 +8,9 @@ from pathlib import Path
 
 from agent_hooks.ruff_support import repo_uses_ruff
 
-# Opt-in switch for automatic fixes at session stop. When unset, the Stop hook is check-only.
+# Automatic fixes at session stop are on by default. Set this to 0/false/no/off for check-only.
 STOP_FIX_ENV_VAR = "AGENT_HOOKS_STOP_FIX"
-TRUTHY_VALUES = {"1", "true", "yes", "on"}
+FALSY_VALUES = {"0", "false", "no", "off"}
 
 
 def _run(command: list[str]) -> tuple[int, str, str]:
@@ -32,7 +32,7 @@ def _emit_block(reason: str) -> None:
 
 
 def _fixes_enabled() -> bool:
-    return os.environ.get(STOP_FIX_ENV_VAR, "").strip().lower() in TRUTHY_VALUES
+    return os.environ.get(STOP_FIX_ENV_VAR, "1").strip().lower() not in FALSY_VALUES
 
 
 def _changed_python_files(root: Path) -> list[str]:
@@ -94,7 +94,7 @@ def main() -> int:
                 lines.append(result_text)
         if not fixes_enabled:
             lines.append(
-                f"Fixes were not applied automatically. Set {STOP_FIX_ENV_VAR}=1 to let the Stop "
+                f"Automatic fixes are disabled by {STOP_FIX_ENV_VAR}. Unset it to let the Stop "
                 "hook run `ruff check --fix` and `ruff format` on files changed in this session."
             )
         _emit_block("\n".join(lines))
