@@ -29,16 +29,22 @@ This is intentionally conservative. It is meant to stop obvious foot-guns, not t
 
 The post-tool cleaner runs `ruff check --fix`, then `ruff format`, then `ruff check` against edited Python files. It only does this when the current repo advertises Ruff support.
 
+The cleaner only reads file paths from the tool's target fields (`path`, `file_path`, `destination`, and similar) and from `apply_patch` file headers. Paths mentioned in free text are ignored, and any path that resolves outside the current working directory, including through a symlink, is skipped so the cleaner never rewrites files outside the repo.
+
 ### Session Stop Ruff Sweep
 
-The session-stop hook performs repo-wide Ruff cleanup at the end of a session. It first checks whether the repo advertises Ruff support and silently skips repos that do not.
+The session-stop hook runs a repo-wide Ruff check at the end of a session. It first checks whether the repo advertises Ruff support and silently skips repos that do not.
+
+By default the hook is check-only: it runs `ruff check .` and `ruff format --check .` and blocks the stop with the findings if either reports problems. It does not rewrite any files.
+
+To let the hook apply fixes automatically, set `AGENT_HOOKS_STOP_FIX=1` (or `true`, `yes`, `on`) in the environment the agent runs in. With that opt-in the hook runs `ruff check --fix` and `ruff format` only on Python files that `git status` reports as changed in the working tree, then performs the same repo-wide check.
 
 The Ruff opt-in markers are:
 
 - `ruff.toml`
 - `.ruff.toml`
-- `pyproject.toml` containing Ruff configuration or dependency references
-- `requirements.txt` containing Ruff dependency references
+- `pyproject.toml` with a `[tool.ruff]` table, or Ruff listed under `project.dependencies`, `project.optional-dependencies`, `dependency-groups`, or Poetry's dependency tables
+- `requirements.txt` or `requirements-dev.txt` listing `ruff` as a requirement (any newline style; comments are ignored)
 
 ## Local Setup
 

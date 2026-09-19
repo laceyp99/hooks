@@ -1,50 +1,170 @@
-import io
 import json
 
+import pytest
 
-def test_main_skips_when_repo_does_not_use_ruff(load_script_module, monkeypatch) -> None:
-    stop_hook = load_script_module("scripts/session_stop.py", "session_stop_skip")
+
+def _ruff(stop_hook, *args: str) -> list[str]:
+    return [stop_hook.sys.executable, "-m", "ruff", *args]
+
+
+@pytest.fixture
+def stop_hook(load_script_module, monkeypatch, tmp_path):
+    module = load_script_module("scripts/session_stop.py", "session_stop_under_test")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv(module.STOP_FIX_ENV_VAR, raising=False)
+    monkeypatch.setattr(module, "repo_uses_ruff", lambda root: True)
+    return module
+
+
+def test_main_skips_when_repo_does_not_use_ruff(stop_hook, monkeypatch, capsys) -> None:
     monkeypatch.setattr(stop_hook, "repo_uses_ruff", lambda root: False)
-    monkeypatch.setattr(stop_hook.sys, "stdout", io.StringIO())
+    monkeypatch.setattr(stop_hook, "_run", lambda command: pytest.fail("ruff must not run"))
 
     assert stop_hook.main() == 0
-    assert stop_hook.sys.stdout.getvalue() == ""
+    assert capsys.readouterr().out == ""
 
 
-def test_main_runs_commands_in_order_without_blocking(load_script_module, monkeypatch) -> None:
-    stop_hook = load_script_module("scripts/session_stop.py", "session_stop_ok")
-    monkeypatch.setattr(stop_hook, "repo_uses_ruff", lambda root: True)
-    stdout = io.StringIO()
-    monkeypatch.setattr(stop_hook.sys, "stdout", stdout)
+def test_main_is_check_only_by_default(stop_hook, monkeypatch, capsys) -> None:
     calls = []
-    results = iter([(0, "", ""), (0, "", ""), (0, "", "")])
 
     def _fake_run(command):
         calls.append(command)
-        return next(results)
+        return 0, "", ""
+
+    monkeypatch.setattr(stop_hook, "_run", _fake_run)
+    monkeypatch.setattr(
+        stop_hook, "_changed_python_files", lambda root: pytest.fail("git must not run")
+    )
+
+    assert stop_hook.main() == 0
+    assert capsys.readouterr().out == ""
+    assert calls == [
+        _ruff(stop_hook, "check", "."),
+        _ruff(stop_hook, "format", "--check", "."),
+    ]
+    assert not any("--fix" in command for command in calls)
+
+
+def test_main_blocks_when_a_check_fails_and_explains_opt_in(stop_hook, monkeypatch, capsys) -> None:
+    results = iter([(1, "line 1: failure", ""), (0, "", "")])
+    monkeypatch.setattr(stop_hook, "_run", lambda command: next(results))
+
+    assert stop_hook.main() == 0
+    message = json.loads(capsys.readouterr().out)
+    reason = message["hookSpecificOutput"]["reason"]
+    assert message["hookSpecificOutput"]["decision"] == "block"
+    assert "Command: " in reason
+    assert "ruff check ." in reason
+    assert "line 1: failure" in reason
+    assert stop_hook.STOP_FIX_ENV_VAR in reason
+
+
+def test_main_blocks_when_format_check_fails(stop_hook, monkeypatch, capsys) -> None:
+    results = iter([(0, "", ""), (1, "Would reformat: a.py", "")])
+    monkeypatch.setattr(stop_hook, "_run", lambda command: next(results))
+
+    assert stop_hook.main() == 0
+    message = json.loads(capsys.readouterr().out)
+    assert message["hookSpecificOutput"]["decision"] == "block"
+    assert "ruff format --check ." in message["hookSpecificOutput"]["reason"]
+    assert "Would reformat: a.py" in message["hookSpecificOutput"]["reason"]
+
+
+@pytest.mark.parametrize("value", ["1", "true", "YES", " on "])
+def test_opt_in_fixes_only_changed_files_then_checks(
+    stop_hook, monkeypatch, capsys, value: str
+) -> None:
+    monkeypatch.setenv(stop_hook.STOP_FIX_ENV_VAR, value)
+    monkeypatch.setattr(stop_hook, "_changed_python_files", lambda root: ["pkg/a.py", "b.py"])
+    calls = []
+
+    def _fake_run(command):
+        calls.append(command)
+        return 0, "", ""
 
     monkeypatch.setattr(stop_hook, "_run", _fake_run)
 
     assert stop_hook.main() == 0
-    assert stdout.getvalue() == ""
+    assert capsys.readouterr().out == ""
     assert calls == [
-        [stop_hook.sys.executable, "-m", "ruff", "check", ".", "--fix"],
-        [stop_hook.sys.executable, "-m", "ruff", "format", "."],
-        [stop_hook.sys.executable, "-m", "ruff", "check", "."],
+        _ruff(stop_hook, "check", "--fix", "pkg/a.py", "b.py"),
+        _ruff(stop_hook, "format", "pkg/a.py", "b.py"),
+        _ruff(stop_hook, "check", "."),
+        _ruff(stop_hook, "format", "--check", "."),
     ]
 
 
-def test_main_blocks_when_final_ruff_check_fails(load_script_module, monkeypatch) -> None:
-    stop_hook = load_script_module("scripts/session_stop.py", "session_stop_fail")
-    monkeypatch.setattr(stop_hook, "repo_uses_ruff", lambda root: True)
-    stdout = io.StringIO()
-    monkeypatch.setattr(stop_hook.sys, "stdout", stdout)
-    results = iter([(0, "", ""), (0, "", ""), (1, "line 1: failure", "")])
+@pytest.mark.parametrize("value", ["0", "false", "", "no"])
+def test_falsy_opt_in_values_stay_check_only(stop_hook, monkeypatch, value: str) -> None:
+    monkeypatch.setenv(stop_hook.STOP_FIX_ENV_VAR, value)
+    calls = []
 
+    def _fake_run(command):
+        calls.append(command)
+        return 0, "", ""
+
+    monkeypatch.setattr(stop_hook, "_run", _fake_run)
+
+    assert stop_hook.main() == 0
+    assert calls == [
+        _ruff(stop_hook, "check", "."),
+        _ruff(stop_hook, "format", "--check", "."),
+    ]
+
+
+def test_opt_in_without_changed_files_never_runs_fixers(stop_hook, monkeypatch) -> None:
+    monkeypatch.setenv(stop_hook.STOP_FIX_ENV_VAR, "1")
+    monkeypatch.setattr(stop_hook, "_changed_python_files", lambda root: [])
+    calls = []
+
+    def _fake_run(command):
+        calls.append(command)
+        return 0, "", ""
+
+    monkeypatch.setattr(stop_hook, "_run", _fake_run)
+
+    assert stop_hook.main() == 0
+    assert calls == [
+        _ruff(stop_hook, "check", "."),
+        _ruff(stop_hook, "format", "--check", "."),
+    ]
+
+
+def test_opt_in_block_reason_omits_opt_in_hint(stop_hook, monkeypatch, capsys) -> None:
+    monkeypatch.setenv(stop_hook.STOP_FIX_ENV_VAR, "1")
+    monkeypatch.setattr(stop_hook, "_changed_python_files", lambda root: [])
+    results = iter([(1, "still failing", ""), (0, "", "")])
     monkeypatch.setattr(stop_hook, "_run", lambda command: next(results))
 
     assert stop_hook.main() == 0
-    message = json.loads(stdout.getvalue())
-    assert message["hookSpecificOutput"]["decision"] == "block"
-    assert "Final command" in message["hookSpecificOutput"]["reason"]
-    assert "line 1: failure" in message["hookSpecificOutput"]["reason"]
+    message = json.loads(capsys.readouterr().out)
+    assert "still failing" in message["hookSpecificOutput"]["reason"]
+    assert stop_hook.STOP_FIX_ENV_VAR not in message["hookSpecificOutput"]["reason"]
+
+
+def test_changed_python_files_parses_git_status(stop_hook, monkeypatch, tmp_path) -> None:
+    for name in ("kept.py", "renamed_new.py", "untracked.py", "notes.txt"):
+        (tmp_path / name).write_text("x = 1\n", encoding="utf-8")
+    porcelain = "\n".join(
+        [
+            " M kept.py",
+            "R  renamed_old.py -> renamed_new.py",
+            "?? untracked.py",
+            " D deleted.py",
+            " M notes.txt",
+            " M missing.py",
+        ]
+    )
+    monkeypatch.setattr(stop_hook._impl, "_run", lambda command: (0, porcelain + "\n", ""))
+
+    assert stop_hook._changed_python_files(tmp_path) == [
+        "kept.py",
+        "renamed_new.py",
+        "untracked.py",
+    ]
+
+
+def test_changed_python_files_is_empty_outside_git(stop_hook, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(stop_hook._impl, "_run", lambda command: (128, "", "fatal: not a git repo"))
+
+    assert stop_hook._changed_python_files(tmp_path) == []

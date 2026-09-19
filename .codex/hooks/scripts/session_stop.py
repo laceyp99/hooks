@@ -8,11 +8,14 @@ from agent_hooks.ruff_support import repo_uses_ruff
 
 _run = _impl._run
 _emit_block = _impl._emit_block
+_changed_python_files = _impl._changed_python_files
+STOP_FIX_ENV_VAR = _impl.STOP_FIX_ENV_VAR
 
 
 def main() -> int:
     originals = {
         "Path": _impl.Path,
+        "_changed_python_files": _impl._changed_python_files,
         "_emit_block": _impl._emit_block,
         "_run": _impl._run,
         "json": _impl.json,
@@ -28,9 +31,11 @@ def main() -> int:
         _impl.sys = sys
         _impl._run = _run
         _impl._emit_block = _emit_block
+        _impl._changed_python_files = _changed_python_files
         return _impl.main()
     finally:
         _impl.Path = originals["Path"]
+        _impl._changed_python_files = originals["_changed_python_files"]
         _impl._emit_block = originals["_emit_block"]
         _impl._run = originals["_run"]
         _impl.json = originals["json"]

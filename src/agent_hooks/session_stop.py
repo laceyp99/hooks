@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 from agent_hooks.ruff_support import repo_uses_ruff
+
+# Opt-in switch for automatic fixes at session stop. When unset, the Stop hook is check-only.
+STOP_FIX_ENV_VAR = "AGENT_HOOKS_STOP_FIX"
+TRUTHY_VALUES = {"1", "true", "yes", "on"}
 
 
 def _run(command: list[str]) -> tuple[int, str, str]:
@@ -15,7 +20,7 @@ def _run(command: list[str]) -> tuple[int, str, str]:
 
 def _emit_block(reason: str) -> None:
     payload = {
-        "systemMessage": "Ruff still reports issues after auto-fix and format.",
+        "systemMessage": "Ruff reports issues at session stop.",
         "hookSpecificOutput": {
             "hookEventName": "Stop",
             "decision": "block",
@@ -26,29 +31,73 @@ def _emit_block(reason: str) -> None:
     sys.stdout.write("\n")
 
 
+def _fixes_enabled() -> bool:
+    return os.environ.get(STOP_FIX_ENV_VAR, "").strip().lower() in TRUTHY_VALUES
+
+
+def _changed_python_files(root: Path) -> list[str]:
+    """Return Python files changed in the working tree, relative to ``root``.
+
+    Uses ``git status --porcelain`` so only files the session actually touched are eligible for
+    automatic fixes. Deleted files are skipped. Returns an empty list outside a Git repository.
+    """
+    exit_code, stdout, _ = _run(
+        ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"]
+    )
+    if exit_code != 0:
+        return []
+
+    changed: list[str] = []
+    for line in stdout.splitlines():
+        if len(line) < 4:
+            continue
+        status, entry = line[:2], line[3:]
+        if "D" in status:
+            continue
+        if " -> " in entry:
+            entry = entry.rsplit(" -> ", 1)[1]
+        entry = entry.strip().strip('"')
+        if entry.endswith(".py") and (root / entry).is_file():
+            changed.append(entry)
+
+    return sorted(set(changed))
+
+
 def main() -> int:
-    if not repo_uses_ruff(Path.cwd()):
+    root = Path.cwd()
+    if not repo_uses_ruff(root):
         return 0
 
-    commands = [
-        [sys.executable, "-m", "ruff", "check", ".", "--fix"],
-        [sys.executable, "-m", "ruff", "format", "."],
+    fixes_enabled = _fixes_enabled()
+    if fixes_enabled:
+        changed = _changed_python_files(root)
+        if changed:
+            _run([sys.executable, "-m", "ruff", "check", "--fix", *changed])
+            _run([sys.executable, "-m", "ruff", "format", *changed])
+
+    checks = [
         [sys.executable, "-m", "ruff", "check", "."],
+        [sys.executable, "-m", "ruff", "format", "--check", "."],
     ]
 
-    outputs: list[tuple[list[str], int, str, str]] = []
-    for command in commands:
+    failures: list[tuple[list[str], str]] = []
+    for command in checks:
         exit_code, stdout, stderr = _run(command)
-        outputs.append((command, exit_code, stdout, stderr))
+        if exit_code != 0:
+            failures.append((command, (stdout or stderr).strip()))
 
-    final_command, final_exit_code, final_stdout, final_stderr = outputs[-1]
-    if final_exit_code != 0:
-        result_text = (final_stdout or final_stderr).strip()
-        reason = "Ruff still reports issues after auto-fix and format.\n"
-        reason += f"Final command: {' '.join(final_command)}"
-        if result_text:
-            reason += f"\n{result_text}"
-        _emit_block(reason)
+    if failures:
+        lines = ["Ruff reports issues at session stop."]
+        for command, result_text in failures:
+            lines.append(f"Command: {' '.join(command)}")
+            if result_text:
+                lines.append(result_text)
+        if not fixes_enabled:
+            lines.append(
+                f"Fixes were not applied automatically. Set {STOP_FIX_ENV_VAR}=1 to let the Stop "
+                "hook run `ruff check --fix` and `ruff format` on files changed in this session."
+            )
+        _emit_block("\n".join(lines))
     return 0
 
 
