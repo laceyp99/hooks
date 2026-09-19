@@ -35,6 +35,8 @@ def test_matches_protected_git_internal_paths(
         "repo/" + git_internal_path("HEAD"),
         "repo\\" + git_name + "\\objects\\ab",
         "./" + git_internal_path("hooks", "pre-commit"),
+        _dot("github") + "/../" + git_internal_path("config"),
+        _dot("github") + "/" + git_internal_path("config"),
     ]
 
     for value in values:
@@ -129,6 +131,7 @@ def test_finds_protected_git_mutation_commands(pre_tool_security, git_internal_p
         },
         {"command": "echo x > " + git_internal_path("config")},
         {"command": "Set-Content " + git_internal_path("config") + " x"},
+        {"command": "Write-Output safe\nSet-Content " + git_internal_path("config") + " x"},
     ]
 
     for payload in payloads:
@@ -142,3 +145,15 @@ def test_ignores_non_string_nested_values(pre_tool_security) -> None:
 
     assert pre_tool_security._find_env_path(payload) is None
     assert pre_tool_security._find_protected_git_path(payload) is None
+
+
+def test_inspects_patch_targets_but_not_patch_body(pre_tool_security) -> None:
+    safe_patch = "*** Update File: README.md\n+Never read src/.env or write .git/config."
+    blocked_patch = "*** Update File: .github/../.git/config\n+unsafe"
+
+    assert pre_tool_security._find_env_path({"patch": safe_patch}) is None
+    assert pre_tool_security._find_protected_git_path({"patch": safe_patch}) is None
+    assert (
+        pre_tool_security._find_protected_git_path({"patch": blocked_patch})
+        == ".github/../.git/config"
+    )

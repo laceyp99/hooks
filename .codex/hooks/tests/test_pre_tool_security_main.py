@@ -87,6 +87,35 @@ def test_main_blocks_git_internal_paths_for_mutating_tools(
     assert blocked in message["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+def test_main_blocks_traversal_to_git_internal_path(pre_tool_security, monkeypatch) -> None:
+    blocked = ".github/../.git/config"
+    payload = {
+        "tool_name": "apply_patch",
+        "tool_input": {"patch": f"*** Update File: {blocked}\n+unsafe"},
+    }
+
+    exit_code, output = _run_main(pre_tool_security, monkeypatch, json.dumps(payload))
+    message = json.loads(output)
+
+    assert exit_code == 0
+    assert message["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert blocked in message["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_main_allows_protected_text_in_patch_body(pre_tool_security, monkeypatch) -> None:
+    payload = {
+        "tool_name": "apply_patch",
+        "tool_input": {
+            "patch": "*** Update File: README.md\n+Never read src/.env or write .git/config."
+        },
+    }
+
+    exit_code, output = _run_main(pre_tool_security, monkeypatch, json.dumps(payload))
+
+    assert exit_code == 0
+    assert output == ""
+
+
 def test_main_allows_git_internal_paths_for_read_only_tools(
     pre_tool_security, git_internal_path, monkeypatch
 ) -> None:

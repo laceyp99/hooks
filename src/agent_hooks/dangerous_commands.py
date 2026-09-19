@@ -16,29 +16,36 @@ COMMAND_TOOLS = {
     "run_command",
 }
 
+COMMAND_FIELD_NAMES = {
+    "cmd",
+    "command",
+    "raw",
+    "script",
+}
+
 DANGEROUS_COMMAND_PATTERNS = (
     re.compile(
-        r"(^|[;&|])\s*(?:sudo\s+)?rm\s+-[A-Za-z]*[rf][A-Za-z]*\s+(?:--\s+)?(?:/|~|\$HOME|\.|\.\.)",
+        r"(^|[;&|\r\n])\s*(?:sudo\s+)?rm\s+-[A-Za-z]*[rf][A-Za-z]*\s+(?:--\s+)?(?:/|~|\$HOME|\.|\.\.)",
         re.IGNORECASE,
     ),
     re.compile(
-        r"(^|[;&|])\s*rmdir\s+/s\s+/q\s+(?:[A-Za-z]:\\|\\\\|%USERPROFILE%|%HOMEPATH%)",
+        r"(^|[;&|\r\n])\s*rmdir\s+/s\s+/q\s+(?:[A-Za-z]:\\|\\\\|%USERPROFILE%|%HOMEPATH%)",
         re.IGNORECASE,
     ),
     re.compile(
-        r"(^|[;&|])\s*del(?:\s+/[A-Za-z]+)+\s+(?:[A-Za-z]:\\|\\\\|%USERPROFILE%|%HOMEPATH%)",
+        r"(^|[;&|\r\n])\s*del(?:\s+/[A-Za-z]+)+\s+(?:[A-Za-z]:\\|\\\\|%USERPROFILE%|%HOMEPATH%)",
         re.IGNORECASE,
     ),
     re.compile(
-        r"(^|[;&|])\s*(?:sudo\s+)?dd\s+.*\bof=(?:/dev/|\\\\\.\\PhysicalDrive)",
+        r"(^|[;&|\r\n])\s*(?:sudo\s+)?dd\s+.*\bof=(?:/dev/|\\\\\.\\PhysicalDrive)",
         re.IGNORECASE,
     ),
-    re.compile(r"(^|[;&|])\s*(?:mkfs|format)\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|\r\n])\s*(?:mkfs|format)\b", re.IGNORECASE),
     re.compile(
         r"\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:bash|sh|zsh|pwsh|powershell)\b",
         re.IGNORECASE,
     ),
-    re.compile(r"(^|[;&|])\s*(?:sudo\s+)?ch(?:mod|own)\s+-R\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|\r\n])\s*(?:sudo\s+)?ch(?:mod|own)\s+-R\b", re.IGNORECASE),
 )
 
 
@@ -48,7 +55,7 @@ def _should_check(tool_name: str) -> bool:
 
 
 def _normalize_command(value: str) -> str:
-    return " ".join(value.strip().split())
+    return "\n".join(" ".join(line.split()) for line in value.strip().splitlines())
 
 
 def _matches_dangerous_command(value: str) -> bool:
@@ -61,7 +68,9 @@ def _matches_dangerous_command(value: str) -> bool:
 
 def _find_dangerous_command(value: Any) -> str | None:
     if isinstance(value, dict):
-        for item in value.values():
+        for key, item in value.items():
+            if str(key).lower() not in COMMAND_FIELD_NAMES:
+                continue
             match = _find_dangerous_command(item)
             if match:
                 return match

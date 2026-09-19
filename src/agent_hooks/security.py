@@ -3,10 +3,15 @@ from __future__ import annotations
 import json
 import re
 import sys
+from collections.abc import Callable, Iterator
 from pathlib import PurePath
 from typing import Any
 
-from agent_hooks.common import first_matching_string, load_stdin_payload, normalize_tool_name
+from agent_hooks.common import (
+    first_matching_string,
+    load_stdin_payload,
+    normalize_tool_name,
+)
 
 PROTECTED_ENV_EXACT_NAMES = {
     ".env",
@@ -65,6 +70,41 @@ ALLOWED_GIT_PROJECT_EXACT_NAMES = {
 
 ALLOWED_GIT_PROJECT_PREFIXES = (".github/",)
 
+FILE_TARGET_FIELD_NAMES = {
+    "destination",
+    "destination_path",
+    "dst",
+    "file",
+    "file_path",
+    "filepath",
+    "filename",
+    "new_path",
+    "old_path",
+    "path",
+    "paths",
+    "source",
+    "source_path",
+    "src",
+    "target",
+    "target_path",
+}
+
+COMMAND_FIELD_NAMES = {
+    "cmd",
+    "command",
+    "raw",
+    "script",
+}
+
+PATCH_FIELD_NAMES = {
+    "patch",
+}
+
+PATCH_TARGET_RE = re.compile(
+    r"^\*{3} (?:Add|Delete|Update) File:\s*(.+?)\s*$|^\*{3} Move to:\s*(.+?)\s*$",
+    re.MULTILINE,
+)
+
 SHELL_COMMAND_TOOLS = {
     "bash",
     "command_execution",
@@ -74,21 +114,21 @@ SHELL_COMMAND_TOOLS = {
 }
 
 PROTECTED_GIT_MUTATION_PATTERNS = (
-    re.compile(r"(^|[;&|])\s*(?:sudo\s+)?rm\s+-[A-Za-z]*[rf][A-Za-z]*\b", re.IGNORECASE),
-    re.compile(r"(^|[;&|])\s*rmdir\s+/s\s+/q\b", re.IGNORECASE),
-    re.compile(r"(^|[;&|])\s*del(?:\s+/[A-Za-z]+)+\b", re.IGNORECASE),
-    re.compile(r"(^|[;&|])\s*(?:sudo\s+)?Remove-Item\b", re.IGNORECASE),
-    re.compile(r"(^|[;&|])\s*(?:sudo\s+)?Move-Item\b", re.IGNORECASE),
-    re.compile(r"(^|[;&|])\s*(?:sudo\s+)?Rename-Item\b", re.IGNORECASE),
-    re.compile(r"(^|[;&|])\s*(?:sudo\s+)?Copy-Item\b", re.IGNORECASE),
-    re.compile(r"(^|[;&|])\s*(?:sudo\s+)?git\s+rm\b", re.IGNORECASE),
-    re.compile(r"(^|[;&|])\s*(?:sudo\s+)?git\s+mv\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|\r\n])\s*(?:sudo\s+)?rm\s+-[A-Za-z]*[rf][A-Za-z]*\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|\r\n])\s*rmdir\s+/s\s+/q\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|\r\n])\s*del(?:\s+/[A-Za-z]+)+\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|\r\n])\s*(?:sudo\s+)?Remove-Item\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|\r\n])\s*(?:sudo\s+)?Move-Item\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|\r\n])\s*(?:sudo\s+)?Rename-Item\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|\r\n])\s*(?:sudo\s+)?Copy-Item\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|\r\n])\s*(?:sudo\s+)?git\s+rm\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|\r\n])\s*(?:sudo\s+)?git\s+mv\b", re.IGNORECASE),
     re.compile(
-        r"(^|[;&|])\s*(?:sudo\s+)?(?:Set-Content|Add-Content|Out-File|Clear-Content|New-Item)\b",
+        r"(^|[;&|\r\n])\s*(?:sudo\s+)?(?:Set-Content|Add-Content|Out-File|Clear-Content|New-Item)\b",
         re.IGNORECASE,
     ),
-    re.compile(r"(^|[;&|])\s*(?:echo|printf|type|cat)\b.*(?:>{1,2}|>>)", re.IGNORECASE),
-    re.compile(r"(^|[;&|])\s*(?:sudo\s+)?(?:mv|cp|tee|tee-object)\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|\r\n])\s*(?:echo|printf|type|cat)\b.*(?:>{1,2}|>>)", re.IGNORECASE),
+    re.compile(r"(^|[;&|\r\n])\s*(?:sudo\s+)?(?:mv|cp|tee|tee-object)\b", re.IGNORECASE),
 )
 
 
@@ -148,23 +188,73 @@ def _matches_protected_git_path(value: str) -> bool:
     if lowered in ALLOWED_GIT_PROJECT_EXACT_NAMES:
         return False
 
+    parts: list[str] = []
+    for segment in lowered.split("/"):
+        if not segment or segment == ".":
+            continue
+        if segment == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(PurePath(segment).name.lower())
+
+    if any(segment == ".git" for segment in parts):
+        return True
+
+    normalized_path = "/".join(parts)
     if any(
-        lowered == prefix[:-1] or lowered.startswith(prefix)
+        normalized_path == prefix[:-1] or normalized_path.startswith(prefix)
         for prefix in ALLOWED_GIT_PROJECT_PREFIXES
     ):
         return False
 
-    parts = [segment for segment in lowered.split("/") if segment]
-    return any(PurePath(segment).name.lower() == ".git" for segment in parts)
+    return False
+
+
+def _iter_relevant_strings(value: Any, *, selected: bool = False) -> Iterator[str]:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized_key = str(key).lower()
+            if normalized_key in PATCH_FIELD_NAMES and isinstance(item, str):
+                for match in PATCH_TARGET_RE.finditer(item):
+                    target = match.group(1) or match.group(2)
+                    if target:
+                        yield target
+                continue
+
+            is_selected = normalized_key in FILE_TARGET_FIELD_NAMES | COMMAND_FIELD_NAMES
+            if is_selected:
+                yield from _iter_relevant_strings(item, selected=True)
+        return
+
+    if isinstance(value, list):
+        if selected:
+            for item in value:
+                yield from _iter_relevant_strings(item, selected=True)
+        return
+
+    if selected and isinstance(value, str):
+        yield value
+
+
+def _first_matching_relevant_string(value: Any, predicate: Callable[[str], bool]) -> str | None:
+    if isinstance(value, str):
+        return first_matching_string(value, predicate)
+
+    for item in _iter_relevant_strings(value):
+        match = first_matching_string(item, predicate)
+        if match:
+            return match
+    return None
 
 
 def _find_env_path(value: Any) -> str | None:
-    match = first_matching_string(value, _matches_env_path)
+    match = _first_matching_relevant_string(value, _matches_env_path)
     return match
 
 
 def _find_protected_git_path(value: Any) -> str | None:
-    match = first_matching_string(value, _matches_protected_git_path)
+    match = _first_matching_relevant_string(value, _matches_protected_git_path)
     return match
 
 
@@ -180,7 +270,7 @@ def _matches_protected_git_mutation_command(value: str) -> bool:
 
 
 def _find_protected_git_mutation_command(value: Any) -> str | None:
-    match = first_matching_string(value, _matches_protected_git_mutation_command)
+    match = _first_matching_relevant_string(value, _matches_protected_git_mutation_command)
     return match
 
 
