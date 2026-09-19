@@ -71,9 +71,9 @@ def _changed_python_files(root: Path) -> list[str]:
 
     ``git status --porcelain`` reports paths relative to the repository top level, so entries are
     joined to that directory and then filtered to files inside ``root``. Every uncommitted Python
-    change in the working tree is included, not only files edited during the session; this is an
-    accepted risk recorded as RC-012 in ``review-findings.md``. Deleted files are skipped.
-    Returns an empty list outside a Git repository.
+    change in the working tree is included, not only files edited during the session; that is a
+    deliberate trade-off, and ``AGENT_HOOKS_STOP_FIX=0`` disables fixes entirely. Deleted files
+    are skipped. Returns an empty list outside a Git repository.
     """
     toplevel = _git_toplevel(root)
     if toplevel is None:
