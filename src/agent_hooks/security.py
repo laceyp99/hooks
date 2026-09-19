@@ -74,8 +74,6 @@ ALLOWED_GIT_PROJECT_EXACT_NAMES = {
     ".gitignore",
 }
 
-ALLOWED_GIT_PROJECT_PREFIXES = (".github/",)
-
 SHELL_COMMAND_TOOLS = {
     "bash",
     "command_execution",
@@ -169,17 +167,9 @@ def _matches_protected_git_path(value: str) -> bool:
             continue
         parts.append(PurePath(segment).name.lower())
 
-    if any(segment == ".git" for segment in parts):
-        return True
-
-    normalized_path = "/".join(parts)
-    if any(
-        normalized_path == prefix[:-1] or normalized_path.startswith(prefix)
-        for prefix in ALLOWED_GIT_PROJECT_PREFIXES
-    ):
-        return False
-
-    return False
+    # ``.github`` and other dot-prefixed project directories never equal ``.git`` after
+    # normalization, so no allowlist is needed beyond the exact names above.
+    return any(segment == ".git" for segment in parts)
 
 
 RELEVANT_FIELD_NAMES = FILE_TARGET_FIELD_NAMES | COMMAND_FIELD_NAMES
