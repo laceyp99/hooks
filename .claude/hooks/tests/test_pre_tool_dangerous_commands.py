@@ -100,3 +100,35 @@ def test_ignores_non_string_nested_values(pre_tool_dangerous_commands) -> None:
     }
 
     assert pre_tool_dangerous_commands._find_dangerous_command(payload) is None
+
+
+def test_argv_lists_are_matched_as_one_command(pre_tool_dangerous_commands) -> None:
+    find = pre_tool_dangerous_commands._find_dangerous_command
+
+    assert find({"command": ["rm", "-rf", "/"]}) == "rm -rf /"
+    assert find({"command": ["sudo", "dd", "if=/dev/zero", "of=/dev/sda"]}) == (
+        "sudo dd if=/dev/zero of=/dev/sda"
+    )
+
+
+def test_argv_wrapped_scripts_are_still_inspected(pre_tool_dangerous_commands) -> None:
+    payload = {"command": ["bash", "-lc", "echo safe; rm -rf /"]}
+
+    result = pre_tool_dangerous_commands._find_dangerous_command(payload)
+
+    assert result is not None
+    assert "rm -rf /" in result
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["git", "log", "--format=%H"],
+        ["Format-Table"],
+        ["rm", "-rf", "build"],
+        ["python", "-m", "pytest", "-q"],
+        ["echo", "rm", "-rf"],
+    ],
+)
+def test_safe_argv_lists_are_allowed(pre_tool_dangerous_commands, argv) -> None:
+    assert pre_tool_dangerous_commands._find_dangerous_command({"command": argv}) is None

@@ -6,8 +6,7 @@ import sys
 from typing import Any
 
 from agent_hooks.common import (
-    COMMAND_FIELD_NAMES,
-    iter_field_strings,
+    iter_command_strings,
     load_stdin_payload,
     normalize_tool_name,
 )
@@ -79,12 +78,11 @@ def _find_dangerous_command(value: Any) -> str | None:
     """Return the first executable command string in the payload that must be blocked.
 
     Only command fields (``command``, ``cmd``, ``script``, ``raw``) are inspected. Other strings
-    in the payload are inert data and are never treated as executable intent.
+    in the payload are inert data and are never treated as executable intent. An argv list is
+    checked as one space-joined command line first, then element by element, so the reported
+    command is the joined line when the list as a whole is what matches.
     """
-    if isinstance(value, str):
-        return value if _is_blocked_command(value) else None
-
-    for command in iter_field_strings(value, COMMAND_FIELD_NAMES, include_patch_targets=False):
+    for command in iter_command_strings(value):
         if _is_blocked_command(command):
             return command
 

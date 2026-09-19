@@ -11,6 +11,7 @@ from agent_hooks.common import (
     COMMAND_FIELD_NAMES,
     FILE_TARGET_FIELD_NAMES,
     first_matching_string,
+    iter_command_strings,
     iter_field_strings,
     load_stdin_payload,
     normalize_tool_name,
@@ -208,8 +209,13 @@ def _matches_protected_git_mutation_command(value: str) -> bool:
 
 
 def _find_protected_git_mutation_command(value: Any) -> str | None:
-    match = _first_matching_relevant_string(value, _matches_protected_git_mutation_command)
-    return match
+    # Only command fields can carry a mutation. Argv lists are checked as one joined command
+    # line first so ``["rm", "-rf", ".git"]`` is seen as ``rm -rf .git``.
+    for item in iter_command_strings(value):
+        match = first_matching_string(item, _matches_protected_git_mutation_command)
+        if match:
+            return match
+    return None
 
 
 def _emit_block(path: str) -> None:

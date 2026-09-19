@@ -107,3 +107,14 @@ def test_main_ignores_invalid_json(pre_tool_dangerous_commands, monkeypatch) -> 
 
     assert exit_code == 0
     assert output == ""
+
+
+def test_main_reports_joined_argv_in_block_reason(pre_tool_dangerous_commands, monkeypatch) -> None:
+    payload = {"tool_name": "shell", "tool_input": {"command": ["rm", "-rf", "/"]}}
+
+    exit_code, output = _run_main(pre_tool_dangerous_commands, monkeypatch, json.dumps(payload))
+    message = json.loads(output)
+
+    assert exit_code == 0
+    assert message["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "blocked command: rm -rf /" in message["hookSpecificOutput"]["permissionDecisionReason"]

@@ -144,6 +144,41 @@ def iter_field_strings(
         yield value
 
 
+def _iter_command_values(value: Any) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+        return
+
+    if isinstance(value, list):
+        parts = [item for item in value if isinstance(item, str)]
+        if len(parts) > 1:
+            yield " ".join(parts)
+        yield from parts
+        return
+
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _iter_command_values(item)
+
+
+def iter_command_strings(value: Any) -> Iterator[str]:
+    """Yield executable command strings found under command fields.
+
+    A list under a command field is an argv vector, as emitted by Codex's ``shell`` tool. Its
+    string elements are joined with single spaces and yielded first so patterns written for a
+    command line see the program and its arguments together; each element is then yielded on
+    its own so a script wrapped in ``["bash", "-lc", "..."]`` is still inspected verbatim.
+    """
+    if isinstance(value, str):
+        yield value
+        return
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key).lower() in COMMAND_FIELD_NAMES:
+                yield from _iter_command_values(item)
+
+
 def first_matching_string(value: Any, predicate: Callable[[str], bool]) -> str | None:
     for item in iter_strings(value):
         if predicate(item):
