@@ -40,7 +40,14 @@ DANGEROUS_COMMAND_PATTERNS = (
         r"(^|[;&|\r\n])\s*(?:sudo\s+)?dd\s+.*\bof=(?:/dev/|\\\\\.\\PhysicalDrive)",
         re.IGNORECASE,
     ),
-    re.compile(r"(^|[;&|\r\n])\s*(?:mkfs|format)\b", re.IGNORECASE),
+    # Match the real disk-formatting commands (`mkfs`, `mkfs.ext4`, `format`, `format.com`)
+    # as complete tokens. PowerShell presentation cmdlets such as `Format-Table` contain a
+    # hyphen immediately after the word and must not be treated as disk formatting.
+    re.compile(
+        r"(^|[;&|\r\n])\s*(?:sudo\s+)?(?:mkfs(?:\.[A-Za-z0-9]+)?|format(?:\.(?:com|exe))?)"
+        r"(?=\s|[;&|\r\n]|$)",
+        re.IGNORECASE,
+    ),
     re.compile(
         r"\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:bash|sh|zsh|pwsh|powershell)\b",
         re.IGNORECASE,
