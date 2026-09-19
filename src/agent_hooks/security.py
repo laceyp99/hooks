@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 import re
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import PurePath
 from typing import Any
 
 from agent_hooks.common import (
+    COMMAND_FIELD_NAMES,
+    FILE_TARGET_FIELD_NAMES,
     first_matching_string,
+    iter_field_strings,
     load_stdin_payload,
     normalize_tool_name,
 )
@@ -69,41 +72,6 @@ ALLOWED_GIT_PROJECT_EXACT_NAMES = {
 }
 
 ALLOWED_GIT_PROJECT_PREFIXES = (".github/",)
-
-FILE_TARGET_FIELD_NAMES = {
-    "destination",
-    "destination_path",
-    "dst",
-    "file",
-    "file_path",
-    "filepath",
-    "filename",
-    "new_path",
-    "old_path",
-    "path",
-    "paths",
-    "source",
-    "source_path",
-    "src",
-    "target",
-    "target_path",
-}
-
-COMMAND_FIELD_NAMES = {
-    "cmd",
-    "command",
-    "raw",
-    "script",
-}
-
-PATCH_FIELD_NAMES = {
-    "patch",
-}
-
-PATCH_TARGET_RE = re.compile(
-    r"^\*{3} (?:Add|Delete|Update) File:\s*(.+?)\s*$|^\*{3} Move to:\s*(.+?)\s*$",
-    re.MULTILINE,
-)
 
 SHELL_COMMAND_TOOLS = {
     "bash",
@@ -211,37 +179,14 @@ def _matches_protected_git_path(value: str) -> bool:
     return False
 
 
-def _iter_relevant_strings(value: Any, *, selected: bool = False) -> Iterator[str]:
-    if isinstance(value, dict):
-        for key, item in value.items():
-            normalized_key = str(key).lower()
-            if normalized_key in PATCH_FIELD_NAMES and isinstance(item, str):
-                for match in PATCH_TARGET_RE.finditer(item):
-                    target = match.group(1) or match.group(2)
-                    if target:
-                        yield target
-                continue
-
-            is_selected = normalized_key in FILE_TARGET_FIELD_NAMES | COMMAND_FIELD_NAMES
-            if is_selected:
-                yield from _iter_relevant_strings(item, selected=True)
-        return
-
-    if isinstance(value, list):
-        if selected:
-            for item in value:
-                yield from _iter_relevant_strings(item, selected=True)
-        return
-
-    if selected and isinstance(value, str):
-        yield value
+RELEVANT_FIELD_NAMES = FILE_TARGET_FIELD_NAMES | COMMAND_FIELD_NAMES
 
 
 def _first_matching_relevant_string(value: Any, predicate: Callable[[str], bool]) -> str | None:
     if isinstance(value, str):
         return first_matching_string(value, predicate)
 
-    for item in _iter_relevant_strings(value):
+    for item in iter_field_strings(value, RELEVANT_FIELD_NAMES):
         match = first_matching_string(item, predicate)
         if match:
             return match

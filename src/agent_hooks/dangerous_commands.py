@@ -5,7 +5,12 @@ import re
 import sys
 from typing import Any
 
-from agent_hooks.common import load_stdin_payload, normalize_tool_name
+from agent_hooks.common import (
+    COMMAND_FIELD_NAMES,
+    iter_field_strings,
+    load_stdin_payload,
+    normalize_tool_name,
+)
 from agent_hooks.security import _matches_protected_git_mutation_command
 
 COMMAND_TOOLS = {
@@ -14,13 +19,6 @@ COMMAND_TOOLS = {
     "shell",
     "shell_command",
     "run_command",
-}
-
-COMMAND_FIELD_NAMES = {
-    "cmd",
-    "command",
-    "raw",
-    "script",
 }
 
 DANGEROUS_COMMAND_PATTERNS = (
@@ -73,31 +71,22 @@ def _matches_dangerous_command(value: str) -> bool:
     return any(pattern.search(normalized) for pattern in DANGEROUS_COMMAND_PATTERNS)
 
 
+def _is_blocked_command(value: str) -> bool:
+    return _matches_dangerous_command(value) or _matches_protected_git_mutation_command(value)
+
+
 def _find_dangerous_command(value: Any) -> str | None:
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if str(key).lower() not in COMMAND_FIELD_NAMES:
-                continue
-            match = _find_dangerous_command(item)
-            if match:
-                return match
-        return None
+    """Return the first executable command string in the payload that must be blocked.
 
-    if isinstance(value, list):
-        for item in value:
-            match = _find_dangerous_command(item)
-            if match:
-                return match
-        return None
+    Only command fields (``command``, ``cmd``, ``script``, ``raw``) are inspected. Other strings
+    in the payload are inert data and are never treated as executable intent.
+    """
+    if isinstance(value, str):
+        return value if _is_blocked_command(value) else None
 
-    if not isinstance(value, str):
-        return None
-
-    if _matches_dangerous_command(value):
-        return value
-
-    if _matches_protected_git_mutation_command(value):
-        return value
+    for command in iter_field_strings(value, COMMAND_FIELD_NAMES, include_patch_targets=False):
+        if _is_blocked_command(command):
+            return command
 
     return None
 
