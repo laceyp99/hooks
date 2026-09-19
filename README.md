@@ -35,7 +35,9 @@ The cleaner only reads file paths from the tool's target fields (`path`, `file_p
 
 The session-stop hook runs a repo-wide Ruff check at the end of a session. It first checks whether the repo advertises Ruff support and silently skips repos that do not.
 
-By default the hook first runs `ruff check --fix` and `ruff format` on the Python files that `git status` reports as changed in the working tree, so automatic fixes stay scoped to the session's own edits. It then runs `ruff check .` and `ruff format --check .` across the repo and blocks the stop with the findings if either still reports problems.
+By default the hook first runs `ruff check --fix` and `ruff format` on the Python files that `git status` reports as changed in the working tree under the current directory. That covers every uncommitted Python change, including edits you made yourself before or during the session, not only files the agent touched; this is an accepted trade-off (RC-012 in `review-findings.md`). Set `AGENT_HOOKS_STOP_FIX=0` if you keep unfinished work in the tree that Ruff should not rewrite. The hook then runs `ruff check .` and `ruff format --check .` across the repo and blocks the stop with the findings if either still reports problems.
+
+When the harness reports that it is already continuing because this hook blocked the previous stop (Claude Code sets `stop_hook_active` in the Stop payload), the hook still runs its fixes and checks but reports any remaining findings as an informational message instead of blocking again. This prevents a repository with lint errors the agent cannot fix from trapping the session in a block loop.
 
 To make the hook check-only, set `AGENT_HOOKS_STOP_FIX=0` (or `false`, `no`, `off`) in the environment the agent runs in. In that mode the hook never rewrites files and the block reason tells the agent that automatic fixes are disabled.
 
