@@ -96,7 +96,7 @@ Pi is slightly different: its installed extension is only a TypeScript bridge. T
    - If the destination folder does not exist yet, the command creates it.
    - On Windows, `%USERPROFILE%` means your personal home folder, such as `C:\Users\YourName`.
    - `settings.example.json` is the checked-in template; `settings.json` is Claude Code's user settings file, which you can edit.
-   - Claude Code runs hook commands through a shell, so the example commands reference `$HOME`. On Windows that resolves to your user profile under Git Bash.
+   - Claude Code runs hook commands through a shell, so the example commands reference `$HOME`. On Windows that resolves to your user profile under Git Bash. The Codex template uses the same `python "$HOME/..."` form for its Windows commands, so both templates read alike.
    - The PreToolUse hooks match `Bash`, `Edit`, `MultiEdit`, `Write`, `NotebookEdit`, and `Read`; the PostToolUse cleaner matches the editing tools; the Stop hook runs on every stop.
    - This gives Claude Code the hook registration, the bootstrap script, the wrapper scripts, and the shared `src` folder it needs.
 
@@ -116,6 +116,7 @@ Pi is slightly different: its installed extension is only a TypeScript bridge. T
    - If the destination folder does not exist yet, the command creates it.
    - On Windows, `%USERPROFILE%` means your personal home folder, such as `C:\Users\YourName`.
    - `hooks.example.json` is the checked-in template; `hooks.json` is your local copy that Codex reads from `%USERPROFILE%\.codex\hooks.json`.
+   - `command` targets POSIX shells with `python3`; `commandWindows` runs under PowerShell, where `$HOME` is your user profile, and uses `python` like the Claude Code template.
    - This gives Codex the hook registration, the bootstrap script, the wrapper scripts, and the shared `src` folder it needs.
 
 5. Manual fallback: install or refresh the Pi bridge in your user profile. Create the Pi extension directory and copy the checked-in bridge over any existing copy. Back the existing file up first if you have local edits you want to keep.

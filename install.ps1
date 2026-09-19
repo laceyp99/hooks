@@ -46,7 +46,11 @@ function Write-JsonFile {
         [string] $Path
     )
 
-    $Value | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Path -Encoding utf8
+    # Claude Code and Codex parse these files as JSON. Write UTF-8 without a byte order mark;
+    # Windows PowerShell's -Encoding utf8 would prepend one.
+    $json = $Value | ConvertTo-Json -Depth 20
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, $encoding)
 }
 
 function Backup-File {
