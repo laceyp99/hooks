@@ -42,16 +42,6 @@ Scope: repository snapshot at `21b4239` on `t3code/audit-repo-with-subagents`. T
 - Disposition: Fixed
 - Route: `/assembly` can implement and test this installer change.
 
-## RC-005
-
-- Severity: Low
-- Location: `install.ps1:107`
-- Risk: A Copilot config missing only its required `version` property is repaired in memory but never written.
-- Evidence: `Ensure-Property` adds `version`, but `Merge-CopilotConfig` does not set `$changed` for that mutation. If managed hooks already exist, `Install-Config` returns as though nothing changed.
-- Recommendation: Make `Ensure-Property` report whether it mutated the object, and include that result in the merge's changed state. Add an isolated config-merge test.
-- Disposition: Open (deferred by owner decision; intentionally left unaddressed)
-- Route: `/assembly` can implement and test this fix directly.
-
 ## RC-006
 
 - Severity: Low
@@ -92,9 +82,59 @@ Scope: repository snapshot at `21b4239` on `t3code/audit-repo-with-subagents`. T
 - Disposition: Fixed
 - Route: `/prelude` should confirm the desired cleanup policy before implementation because this changes intended product behavior.
 
+## RC-010
+
+- Severity: High
+- Location: `src/agent_hooks/session_stop.py` (`main`)
+- Risk: The Stop hook never read its payload, so it ignored `stop_hook_active`. Claude Code forces the session to continue on every `block` until `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` (default 8) consecutive blocks, so a repo-wide lint failure unrelated to the task produced up to eight forced continuations per stop, each running two repo-wide Ruff passes.
+- Evidence: `main()` did not call `load_stdin_payload()`. The installed Claude Code CLI defines `stop_hook_active` on Stop payloads and warns hook authors to check it when the cap is hit.
+- Recommendation: Read the payload; when `stop_hook_active` is true, run the checks but report remaining findings without a `decision`.
+- Disposition: Fixed
+- Route: `/assembly`
+
+## RC-011
+
+- Severity: Medium
+- Location: `src/agent_hooks/session_stop.py` (`_changed_python_files`)
+- Risk: `git status --porcelain` paths are relative to the repository top level, but they were joined to the hook's current directory. From a subdirectory (a monorepo package, for example) no file matched, fixes were silently skipped, and the repo-wide check then blocked with findings the fix step should have resolved.
+- Evidence: Reproduced in a scratch repository: the changed file was detected from the root and missed from `pkg/`.
+- Recommendation: Resolve `git rev-parse --show-toplevel`, join entries to it, keep only files under the current directory, and pass them relative to the current directory.
+- Disposition: Fixed
+- Route: `/assembly`
+
+## RC-012
+
+- Severity: Medium
+- Location: `src/agent_hooks/session_stop.py` (`_changed_python_files`), `README.md` Session Stop section
+- Risk: Automatic Stop fixes cover every uncommitted Python change in the working tree, including the user's own in-progress edits, while the docstring and README described them as scoped to the session's edits. An unused import the user intends to use next can be removed by `ruff check --fix` at stop.
+- Evidence: The implementation reads `git status --porcelain`, which has no notion of which process changed a file.
+- Recommendation: Keep the behavior. Correct the docstring and README, and point users with unfinished work at `AGENT_HOOKS_STOP_FIX=0`.
+- Disposition: Accepted risk (owner decision, 2026-09-19). Documentation corrected.
+- Route: none
+
+## RC-013
+
+- Severity: Low
+- Location: `src/agent_hooks/security.py` (`_matches_protected_git_path`)
+- Risk: After the `.git` segment check returned early, the `.github/` allowlist loop returned False on both branches. Dead code that implied the allowlist affected behavior.
+- Evidence: Both branches after the segment check returned False; `.github` never equals `.git` after normalization.
+- Recommendation: Delete the loop and `ALLOWED_GIT_PROJECT_PREFIXES`.
+- Disposition: Fixed
+- Route: `/assembly`
+
+## RC-014
+
+- Severity: Low
+- Location: `review-findings.md`
+- Risk: RC-005 described `Merge-CopilotConfig`, which was deleted with the Copilot harness. `Merge-ContainerConfig` has no equivalent gap: its only `Ensure-Property` call adds a missing `hooks` key, and that case always coincides with a real change.
+- Recommendation: Remove RC-005.
+- Disposition: Fixed (RC-005 removed with the Copilot harness)
+- Route: none
+
 ## Open questions and residual risks
 
-- Structured argv payloads such as `["rm", "-rf", "/"]` are checked one string at a time and would bypass detection. Confirm whether any supported host emits that payload shape before treating it as a separate defect.
+- Structured argv payloads such as `["rm", "-rf", "/"]` are checked one string at a time and bypass detection. Codex's `shell` tool emits argv lists, so this is a live gap; see the `/prelude` options memo in the PR conversation for candidate fixes and trade-offs.
+- The installer now writes merged JSON as UTF-8 without a byte order mark (`Write-JsonFile` in `install.ps1`). Windows PowerShell's `Set-Content -Encoding utf8` previously prepended one, and Claude Code's tolerance for a BOM in `settings.json` was never verified.
+- The Stop block payload carries `decision`/`reason` both at the top level (Claude Code) and under `hookSpecificOutput` (Codex, Pi bridge). How Claude Code treats the extra `hookSpecificOutput` block for Stop is deliberately unverified; the top-level fields are the documented contract.
 - The installer and Pi TypeScript bridge have no automated behavioral coverage. This increases regression risk around config merging, refreshes, subprocess failures, and event-state handling.
-- The audit did not execute the installer against a disposable user profile or run the Pi bridge inside the Pi host.
-- The supplied report records 22 Copilot hook-runner failures caused by `spawn pwsh.exe ENOENT`. This machine currently has `powershell.exe` but no `pwsh.exe` on `PATH`, which corroborates the environment mismatch. It remains unclear whether the repository can choose Copilot's shell executable or must document PowerShell 7 as a host prerequisite, so this is retained as an operational blocker rather than a confirmed code defect.
+- The audit did not execute the installer against a disposable user profile or run the Pi bridge inside the Pi host, and the Claude Code bundle has not been exercised inside a live Claude Code session.
