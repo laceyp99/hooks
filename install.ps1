@@ -306,19 +306,30 @@ function Install-PiBridge {
         [string] $DestinationPath
     )
 
-    if (-not (Ask-YesNo "Install Pi bridge extension if it is missing?")) {
+    if (-not (Ask-YesNo "Refresh managed Pi bridge extension?")) {
         Write-Host "Skipped Pi bridge extension."
         return
     }
 
     New-Item -ItemType Directory -Force (Split-Path -Parent $DestinationPath) | Out-Null
-    if (Test-Path -LiteralPath $DestinationPath) {
-        Write-Host "Pi bridge already exists at $DestinationPath; leaving it unchanged."
+    if (-not (Test-Path -LiteralPath $DestinationPath)) {
+        Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath
+        Write-Host "Installed Pi bridge extension at $DestinationPath"
         return
     }
 
-    Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath
-    Write-Host "Installed Pi bridge extension at $DestinationPath"
+    $sourceHash = (Get-FileHash -LiteralPath $SourcePath -Algorithm SHA256).Hash
+    $destinationHash = (Get-FileHash -LiteralPath $DestinationPath -Algorithm SHA256).Hash
+    if ($sourceHash -eq $destinationHash) {
+        Write-Host "Pi bridge at $DestinationPath is already up to date."
+        return
+    }
+
+    # The bridge is a managed runtime file. Back up the existing copy so local edits are not
+    # lost, then replace it with the checked-in version.
+    Backup-File -Path $DestinationPath
+    Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath -Force
+    Write-Host "Refreshed Pi bridge extension at $DestinationPath"
 }
 
 $copilotHooksDir = Join-Path $env:USERPROFILE ".copilot\hooks"

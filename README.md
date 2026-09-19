@@ -76,7 +76,7 @@ Pi is slightly different: its installed extension is only a TypeScript bridge. T
 
    The installer refreshes the managed runtime files for Copilot and Codex when you confirm those prompts. Those managed files are `run_hook.py`, the wrapper `scripts/` folders, and the shared `src/` folder copied into your Windows user profile.
 
-   The installer can also install the Pi bridge extension. It creates `%USERPROFILE%\.pi\agent\extensions\` if needed and copies `agent-hooks.ts` only when that destination file does not already exist.
+   The installer also treats the Pi bridge extension as a managed runtime file. When you confirm that prompt it creates `%USERPROFILE%\.pi\agent\extensions\` if needed and installs `agent-hooks.ts`. If a bridge already exists and differs from the checked-in copy, the installer backs it up to a timestamped `.bak-*` file and replaces it; an identical bridge is left untouched.
 
 3. Manual fallback: install the Copilot bundle into your user profile, then create your local `hooks.json` from the example file only if one does not already exist.
 
@@ -114,13 +114,11 @@ Pi is slightly different: its installed extension is only a TypeScript bridge. T
    - `hooks.example.json` is the checked-in template; `hooks.json` is your local copy that Codex reads from `%USERPROFILE%\.codex\hooks.json`.
    - This gives Codex the hook registration, the bootstrap script, the wrapper scripts, and the shared `src` folder it needs.
 
-5. Manual fallback: install the Pi bridge into your user profile. Create the Pi extension directory and copy the bridge into place only if one does not already exist.
+5. Manual fallback: install or refresh the Pi bridge in your user profile. Create the Pi extension directory and copy the checked-in bridge over any existing copy. Back the existing file up first if you have local edits you want to keep.
 
    ```powershell
    New-Item -ItemType Directory -Force "$env:USERPROFILE\.pi\agent\extensions" | Out-Null
-   if (-not (Test-Path "$env:USERPROFILE\.pi\agent\extensions\agent-hooks.ts")) {
-     Copy-Item ".pi\agent\extensions\agent-hooks.ts" "$env:USERPROFILE\.pi\agent\extensions\agent-hooks.ts"
-   }
+   Copy-Item -Force ".pi\agent\extensions\agent-hooks.ts" "$env:USERPROFILE\.pi\agent\extensions\agent-hooks.ts"
    ```
 
    - The Pi bridge expects this source checkout to remain available at `%USERPROFILE%\code\agent-hooks` by default.
