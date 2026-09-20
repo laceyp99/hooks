@@ -214,6 +214,54 @@ function Sync-ContainerMatcher {
     return $updated
 }
 
+# Keeps an already-installed managed hook entry in step with the template. Without this a
+# command change never reaches an existing install: Test-HookContainsScript only asks whether the
+# script file name appears somewhere in the entry, and both the old and the new command mention
+# run_hook.py, so nothing is ever "missing" and nothing is added. Only entries that already hold
+# a managed script are touched, and only the fields the template declares.
+function Sync-ManagedHookEntry {
+    param(
+        [object[]] $ExistingContainers,
+        [object] $TemplateHook,
+        [string] $ScriptName,
+        [string] $Name,
+        [string] $EventName
+    )
+
+    $syncFields = @("command", "commandWindows", "timeout", "statusMessage")
+    $updated = $false
+
+    foreach ($container in $ExistingContainers) {
+        foreach ($existingHook in (Get-CodexContainerHooks -Container $container)) {
+            if (-not (Test-HookContainsScript -Hook $existingHook -ScriptName $ScriptName)) {
+                continue
+            }
+
+            foreach ($field in $syncFields) {
+                if (-not ((Get-PropertyNames -Object $TemplateHook) -contains $field)) {
+                    continue
+                }
+
+                $templateValue = $TemplateHook.$field
+                if ((Get-PropertyNames -Object $existingHook) -contains $field) {
+                    if ($existingHook.$field -eq $templateValue) {
+                        continue
+                    }
+
+                    $existingHook.$field = $templateValue
+                } else {
+                    $existingHook | Add-Member -NotePropertyName $field -NotePropertyValue $templateValue
+                }
+
+                Write-Host "Updated $Name $EventName $field for $ScriptName"
+                $updated = $true
+            }
+        }
+    }
+
+    return $updated
+}
+
 # Merges hook containers shaped like { "hooks": { "<Event>": [ { "matcher": ..., "hooks": [...] } ] } }.
 # Both Codex (%USERPROFILE%\.codex\hooks.json) and Claude Code (%USERPROFILE%\.claude\settings.json)
 # use this layout.
@@ -254,6 +302,10 @@ function Merge-ContainerConfig {
                     Where-Object { Test-HookContainsScript -Hook $_ -ScriptName $scriptName } |
                     Select-Object -First 1
                 if ($alreadyInstalled) {
+                    if (Sync-ManagedHookEntry -ExistingContainers $existingContainers -TemplateHook $templateHook -ScriptName $scriptName -Name $Name -EventName $eventName) {
+                        $changed = $true
+                    }
+
                     continue
                 }
 
@@ -299,7 +351,11 @@ function Install-Config {
         [string] $DestinationPath,
 
         [Parameter(Mandatory = $true)]
-        [scriptblock] $Merge
+        [scriptblock] $Merge,
+
+        # Printed whenever this config is created or changed. Used to tell Codex users that a
+        # changed hook command invalidates the trust hash Codex keeps in config.toml.
+        [string] $WriteNote = ""
     )
 
     New-Item -ItemType Directory -Force (Split-Path -Parent $DestinationPath) | Out-Null
@@ -307,6 +363,10 @@ function Install-Config {
     if (-not (Test-Path -LiteralPath $DestinationPath)) {
         Copy-Item -LiteralPath $TemplatePath -Destination $DestinationPath
         Write-Host "Created $Name config at $DestinationPath"
+        if ($WriteNote) {
+            Write-Host $WriteNote
+        }
+
         return
     }
 
@@ -327,6 +387,9 @@ function Install-Config {
     Backup-File -Path $DestinationPath
     Write-JsonFile -Value $existing -Path $DestinationPath
     Write-Host "Merged $Name config at $DestinationPath"
+    if ($WriteNote) {
+        Write-Host $WriteNote
+    }
 }
 
 function Copy-ManagedBundle {
@@ -406,11 +469,15 @@ Copy-ManagedBundle `
     -SourceHooksDir (Join-Path $RepoRoot ".claude\hooks") `
     -DestinationHooksDir $claudeHooksDir
 
+# Codex keeps a trusted_hash per hook under [hooks.state] in config.toml. Any change to a hook
+# command invalidates it, and an untrusted hook is silently skipped: the session runs with no
+# hook output and nothing says a guard was bypassed. Say so whenever this file is written.
 Install-Config `
     -Name "Codex" `
     -TemplatePath (Join-Path $RepoRoot ".codex\hooks.example.json") `
     -DestinationPath (Join-Path $env:USERPROFILE ".codex\hooks.json") `
-    -Merge ${function:Merge-ContainerConfig}
+    -Merge ${function:Merge-ContainerConfig} `
+    -WriteNote "  Note: Codex will treat these hooks as new or modified and will not run them until you review and trust them in the Codex TUI."
 
 Copy-ManagedBundle `
     -Name "Codex" `
