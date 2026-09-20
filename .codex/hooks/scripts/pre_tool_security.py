@@ -8,6 +8,8 @@ _matches_protected_git_path = _impl._matches_protected_git_path
 _should_check = _impl._should_check
 _should_check_git_paths = _impl._should_check_git_paths
 _find_env_path = _impl._find_env_path
+_find_env_access_in_command = _impl._find_env_access_in_command
+_find_env_path_in_shell_payload = _impl._find_env_path_in_shell_payload
 _find_protected_git_path = _impl._find_protected_git_path
 _matches_protected_git_mutation_command = _impl._matches_protected_git_mutation_command
 _find_protected_git_mutation_command = _impl._find_protected_git_mutation_command
@@ -20,6 +22,8 @@ def main() -> int:
         "_emit_block": _impl._emit_block,
         "_emit_git_block": _impl._emit_git_block,
         "_find_env_path": _impl._find_env_path,
+        "_find_env_access_in_command": _impl._find_env_access_in_command,
+        "_find_env_path_in_shell_payload": _impl._find_env_path_in_shell_payload,
         "_find_protected_git_path": _impl._find_protected_git_path,
         "_find_protected_git_mutation_command": _impl._find_protected_git_mutation_command,
         "_matches_env_path": _impl._matches_env_path,
@@ -38,6 +42,8 @@ def main() -> int:
         _impl._should_check = _should_check
         _impl._should_check_git_paths = _should_check_git_paths
         _impl._find_env_path = _find_env_path
+        _impl._find_env_access_in_command = _find_env_access_in_command
+        _impl._find_env_path_in_shell_payload = _find_env_path_in_shell_payload
         _impl._find_protected_git_path = _find_protected_git_path
         _impl._find_protected_git_mutation_command = _find_protected_git_mutation_command
         _impl._matches_protected_git_mutation_command = _matches_protected_git_mutation_command
@@ -48,6 +54,8 @@ def main() -> int:
         _impl._emit_block = originals["_emit_block"]
         _impl._emit_git_block = originals["_emit_git_block"]
         _impl._find_env_path = originals["_find_env_path"]
+        _impl._find_env_access_in_command = originals["_find_env_access_in_command"]
+        _impl._find_env_path_in_shell_payload = originals["_find_env_path_in_shell_payload"]
         _impl._find_protected_git_path = originals["_find_protected_git_path"]
         _impl._find_protected_git_mutation_command = originals[
             "_find_protected_git_mutation_command"

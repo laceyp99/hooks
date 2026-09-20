@@ -73,6 +73,55 @@ def test_main_blocks_env_like_paths(pre_tool_security, monkeypatch) -> None:
     assert blocked in message["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+def test_main_allows_a_protected_name_a_shell_command_only_mentions(
+    pre_tool_security, monkeypatch
+) -> None:
+    """A commit message, a PR body, or a grep pattern carries the name as text.
+
+    The git rule has always required a mutation verb before denying. Without the same gate here,
+    writing about a secret file was as blocked as reading one.
+    """
+    target = _dot("env")
+    mentions = [
+        f'git commit -m "fix {target} loading"',
+        f'gh pr create --body "Adds {target} support"',
+        f'grep -rn "{target}" src/',
+        f'echo "{target}" >> .gitignore',
+    ]
+
+    for command in mentions:
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}}
+        exit_code, output = _run_main(pre_tool_security, monkeypatch, json.dumps(payload))
+
+        assert exit_code == 0
+        assert output == "", command
+
+
+def test_main_still_blocks_shell_commands_that_touch_the_file(
+    pre_tool_security, monkeypatch
+) -> None:
+    target = _dot("env")
+    accesses = [
+        f"cat {target}",
+        f"sudo cat {target}",
+        f"ls -a; cat {target}",
+        f"cp {target} /tmp/stolen",
+        f"rm -f {target}",
+        f"echo LEAK=1 >> {target}",
+        f"git add {target}",
+        f"Get-Content -LiteralPath {target} -Raw",
+    ]
+
+    for command in accesses:
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}}
+        exit_code, output = _run_main(pre_tool_security, monkeypatch, json.dumps(payload))
+        message = json.loads(output)
+
+        assert exit_code == 0
+        assert message["hookSpecificOutput"]["permissionDecision"] == "deny", command
+        assert target in message["hookSpecificOutput"]["permissionDecisionReason"]
+
+
 def test_main_blocks_git_internal_paths_for_mutating_tools(
     pre_tool_security, git_internal_path, monkeypatch
 ) -> None:

@@ -187,6 +187,37 @@ def test_notebook_path_is_a_file_target(pre_tool_security, git_internal_path) ->
     assert pre_tool_security._find_protected_git_path(payload) == git_internal_path("config")
 
 
+def test_redirect_targets_are_the_only_access_on_a_non_access_segment(pre_tool_security) -> None:
+    """``echo ".env" >> .gitignore`` appends to .gitignore. The other name is just text."""
+    find = pre_tool_security._find_env_access_in_command
+    target = _dot("env")
+
+    assert find(f'echo "{target}" >> .gitignore') is None
+    assert find(f"echo LEAK=1 >> {target}") == target
+    assert find(f"echo x > {target}") == target
+
+
+def test_git_is_an_access_verb_only_for_subcommands_that_touch_files(pre_tool_security) -> None:
+    find = pre_tool_security._find_env_access_in_command
+    target = _dot("env")
+
+    assert find(f'git commit -m "document {target}"') is None
+    assert find(f'git log --grep "{target}"') is None
+    assert find(f"git add {target}") == target
+    assert find(f"git checkout -- {target}") == target
+
+
+def test_access_is_detected_past_prefixes_and_program_paths(pre_tool_security) -> None:
+    find = pre_tool_security._find_env_access_in_command
+    target = _dot("env")
+
+    assert find(f"sudo cat {target}") == target
+    assert find(f"FOO=bar cat {target}") == target
+    assert find(f"/bin/cat {target}") == target
+    assert find(f"ls -a; cat {target}") == target
+    assert find(f"echo hi | cat {target}") == target
+
+
 def test_safe_commands_are_not_git_mutations(pre_tool_security, git_internal_path) -> None:
     payloads = [
         {"command": "git status"},
