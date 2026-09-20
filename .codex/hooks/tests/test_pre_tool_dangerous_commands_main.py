@@ -118,3 +118,16 @@ def test_main_reports_joined_argv_in_block_reason(pre_tool_dangerous_commands, m
     assert exit_code == 0
     assert message["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "blocked command: rm -rf /" in message["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_main_blocks_dangerous_powershell_tool_commands(
+    pre_tool_dangerous_commands, monkeypatch
+) -> None:
+    blocked = "Remove-Item -Recurse -Force C:\\"
+    payload = {"tool_name": "PowerShell", "tool_input": {"command": f"rm -rf ~; {blocked}"}}
+
+    exit_code, output = _run_main(pre_tool_dangerous_commands, monkeypatch, json.dumps(payload))
+    message = json.loads(output)
+
+    assert exit_code == 0
+    assert message["hookSpecificOutput"]["permissionDecision"] == "deny"

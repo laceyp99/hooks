@@ -15,6 +15,8 @@ from agent_hooks.security import _matches_protected_git_mutation_command
 COMMAND_TOOLS = {
     "bash",
     "command_execution",
+    "powershell",
+    "pwsh",
     "shell",
     "shell_command",
     "run_command",

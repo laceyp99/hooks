@@ -168,6 +168,8 @@ def test_inspects_patch_targets_but_not_patch_body(pre_tool_security) -> None:
         ("MultiEdit", True, True),
         ("Write", True, True),
         ("NotebookEdit", True, True),
+        ("PowerShell", True, False),
+        ("pwsh", True, False),
         ("Glob", False, False),
         ("Grep", False, False),
     ],
@@ -206,3 +208,11 @@ def test_safe_argv_lists_are_not_git_mutations(pre_tool_security, git_internal_p
 
     for payload in payloads:
         assert pre_tool_security._find_protected_git_mutation_command(payload) is None
+
+
+@pytest.mark.parametrize("tool_name", ["PowerShell", "powershell", "pwsh", "functions.PowerShell"])
+def test_powershell_is_gated_as_a_shell_tool(pre_tool_security, tool_name: str) -> None:
+    # A PowerShell tool is a full shell. It must be inspected, but through its command rather
+    # than as a direct file target, exactly like Bash.
+    assert pre_tool_security._should_check(tool_name) is True
+    assert pre_tool_security._should_check_git_paths(tool_name) is False

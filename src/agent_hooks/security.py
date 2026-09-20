@@ -53,6 +53,8 @@ FILE_ACCESS_TOOLS = {
     "move_file",
     "multiedit",
     "notebookedit",
+    "powershell",
+    "pwsh",
     "read",
     "read_file",
     "rename",
@@ -68,6 +70,8 @@ MUTATING_FILE_TOOLS = FILE_ACCESS_TOOLS - {
     "shell",
     "shell_command",
     "command_execution",
+    "powershell",
+    "pwsh",
 }
 
 ALLOWED_GIT_PROJECT_EXACT_NAMES = {
@@ -78,6 +82,8 @@ ALLOWED_GIT_PROJECT_EXACT_NAMES = {
 SHELL_COMMAND_TOOLS = {
     "bash",
     "command_execution",
+    "powershell",
+    "pwsh",
     "shell",
     "shell_command",
     "run_command",

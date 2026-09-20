@@ -44,6 +44,8 @@ def test_matches_dangerous_command(pre_tool_dangerous_commands, value: str, expe
         ("command_execution", True),
         ("shell", True),
         ("run_command", True),
+        ("PowerShell", True),
+        ("pwsh", True),
         ("read_file", False),
         ("apply_patch", False),
     ],

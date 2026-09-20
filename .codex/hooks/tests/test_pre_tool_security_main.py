@@ -137,3 +137,29 @@ def test_main_ignores_invalid_json(pre_tool_security, monkeypatch) -> None:
 
     assert exit_code == 0
     assert output == ""
+
+
+def test_main_blocks_env_paths_for_the_powershell_tool(pre_tool_security, monkeypatch) -> None:
+    target = _dot("env")
+    payload = {"tool_name": "PowerShell", "tool_input": {"command": f"Get-Content {target}"}}
+
+    exit_code, output = _run_main(pre_tool_security, monkeypatch, json.dumps(payload))
+    message = json.loads(output)
+
+    assert exit_code == 0
+    assert message["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert target in message["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_main_blocks_git_mutations_for_the_powershell_tool(pre_tool_security, monkeypatch) -> None:
+    target = "/".join((_dot("git"), "config"))
+    payload = {
+        "tool_name": "PowerShell",
+        "tool_input": {"command": f"Remove-Item -Force {target}"},
+    }
+
+    exit_code, output = _run_main(pre_tool_security, monkeypatch, json.dumps(payload))
+    message = json.loads(output)
+
+    assert exit_code == 0
+    assert message["hookSpecificOutput"]["permissionDecision"] == "deny"
