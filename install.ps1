@@ -156,6 +156,64 @@ function Get-CodexContainerHooks {
     return @($Container.hooks)
 }
 
+# Keeps the matcher on an already-installed managed container in step with the template. Without
+# this a template matcher change never reaches an existing install: the managed hooks are already
+# present, so nothing is added and the stale matcher silently keeps its old tool coverage.
+function Sync-ContainerMatcher {
+    param(
+        [object[]] $ExistingContainers,
+        [object] $TemplateContainer,
+        [string[]] $ScriptNames,
+        [string] $Name,
+        [string] $EventName
+    )
+
+    if ($null -eq $ScriptNames -or $ScriptNames.Count -eq 0) {
+        return $false
+    }
+
+    if (-not ((Get-PropertyNames -Object $TemplateContainer) -contains "matcher")) {
+        return $false
+    }
+
+    $templateMatcher = $TemplateContainer.matcher
+    $updated = $false
+    foreach ($container in $ExistingContainers) {
+        $holdsManaged = $false
+        foreach ($existingHook in (Get-CodexContainerHooks -Container $container)) {
+            foreach ($scriptName in $ScriptNames) {
+                if (Test-HookContainsScript -Hook $existingHook -ScriptName $scriptName) {
+                    $holdsManaged = $true
+                    break
+                }
+            }
+
+            if ($holdsManaged) {
+                break
+            }
+        }
+
+        if (-not $holdsManaged) {
+            continue
+        }
+
+        if ((Get-PropertyNames -Object $container) -contains "matcher") {
+            if ($container.matcher -eq $templateMatcher) {
+                continue
+            }
+
+            $container.matcher = $templateMatcher
+        } else {
+            $container | Add-Member -NotePropertyName "matcher" -NotePropertyValue $templateMatcher
+        }
+
+        Write-Host "Updated $Name $EventName matcher to $templateMatcher"
+        $updated = $true
+    }
+
+    return $updated
+}
+
 # Merges hook containers shaped like { "hooks": { "<Event>": [ { "matcher": ..., "hooks": [...] } ] } }.
 # Both Codex (%USERPROFILE%\.codex\hooks.json) and Claude Code (%USERPROFILE%\.claude\settings.json)
 # use this layout.
@@ -182,11 +240,14 @@ function Merge-ContainerConfig {
         $existingContainers = @($Existing.hooks.$eventName)
         foreach ($templateContainer in $templateContainers) {
             $missingHooks = @()
+            $templateScriptNames = @()
             foreach ($templateHook in @($templateContainer.hooks)) {
                 $scriptName = $ManagedScripts | Where-Object { Test-HookContainsScript -Hook $templateHook -ScriptName $_ } | Select-Object -First 1
                 if (-not $scriptName) {
                     continue
                 }
+
+                $templateScriptNames += $scriptName
 
                 $alreadyInstalled = $existingContainers |
                     ForEach-Object { Get-CodexContainerHooks -Container $_ } |
@@ -198,6 +259,10 @@ function Merge-ContainerConfig {
 
                 $missingHooks += $templateHook
                 Write-Host "Added $Name $eventName hook for $scriptName"
+            }
+
+            if (Sync-ContainerMatcher -ExistingContainers $existingContainers -TemplateContainer $templateContainer -ScriptNames $templateScriptNames -Name $Name -EventName $eventName) {
+                $changed = $true
             }
 
             if ($missingHooks.Count -eq 0) {
