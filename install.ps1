@@ -81,6 +81,23 @@ function Test-HookContainsScript {
     return $json.Contains($ScriptName)
 }
 
+# Returns an object's property names as an array. Set-StrictMode -Version Latest makes member
+# enumeration (`$o.PSObject.Properties.Name`) throw when the property collection is empty, which
+# is exactly the case for a settings file that has no `hooks` key yet. Enumerating each property
+# individually avoids that.
+function Get-PropertyNames {
+    param(
+        [AllowNull()]
+        [object] $Object
+    )
+
+    if ($null -eq $Object) {
+        return @()
+    }
+
+    return @($Object.PSObject.Properties | ForEach-Object { $_.Name })
+}
+
 function Ensure-Property {
     param(
         [Parameter(Mandatory = $true)]
@@ -93,7 +110,7 @@ function Ensure-Property {
         [object] $Value
     )
 
-    if (-not ($Object.PSObject.Properties.Name -contains $Name)) {
+    if (-not ((Get-PropertyNames -Object $Object) -contains $Name)) {
         $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value
     }
 }
@@ -107,13 +124,13 @@ function Find-ContainerForTemplate {
         [object] $TemplateContainer
     )
 
-    $templateHasMatcher = $TemplateContainer.PSObject.Properties.Name -contains "matcher"
+    $templateHasMatcher = (Get-PropertyNames -Object $TemplateContainer) -contains "matcher"
     foreach ($container in $ExistingContainers) {
-        if (-not ($container.PSObject.Properties.Name -contains "hooks")) {
+        if (-not ((Get-PropertyNames -Object $container) -contains "hooks")) {
             continue
         }
 
-        $containerHasMatcher = $container.PSObject.Properties.Name -contains "matcher"
+        $containerHasMatcher = (Get-PropertyNames -Object $container) -contains "matcher"
         if ($templateHasMatcher -and $containerHasMatcher -and $container.matcher -eq $TemplateContainer.matcher) {
             return $container
         }
@@ -132,7 +149,7 @@ function Get-CodexContainerHooks {
         [object] $Container
     )
 
-    if ($null -eq $Container -or -not ($Container.PSObject.Properties.Name -contains "hooks")) {
+    if ($null -eq $Container -or -not ((Get-PropertyNames -Object $Container) -contains "hooks")) {
         return @()
     }
 
@@ -156,9 +173,9 @@ function Merge-ContainerConfig {
     $changed = $false
     Ensure-Property -Object $Existing -Name "hooks" -Value ([pscustomobject]@{})
 
-    foreach ($eventName in $Template.hooks.PSObject.Properties.Name) {
+    foreach ($eventName in (Get-PropertyNames -Object $Template.hooks)) {
         $templateContainers = @($Template.hooks.$eventName)
-        if (-not ($Existing.hooks.PSObject.Properties.Name -contains $eventName)) {
+        if (-not ((Get-PropertyNames -Object $Existing.hooks) -contains $eventName)) {
             $Existing.hooks | Add-Member -NotePropertyName $eventName -NotePropertyValue @()
         }
 
