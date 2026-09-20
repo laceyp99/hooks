@@ -5,12 +5,18 @@ import re
 import sys
 from typing import Any
 
-from agent_hooks.common import load_stdin_payload, normalize_tool_name
+from agent_hooks.common import (
+    iter_command_strings,
+    load_stdin_payload,
+    normalize_tool_name,
+)
 from agent_hooks.security import _matches_protected_git_mutation_command
 
 COMMAND_TOOLS = {
     "bash",
     "command_execution",
+    "powershell",
+    "pwsh",
     "shell",
     "shell_command",
     "run_command",
@@ -18,27 +24,34 @@ COMMAND_TOOLS = {
 
 DANGEROUS_COMMAND_PATTERNS = (
     re.compile(
-        r"(^|[;&|])\s*(?:sudo\s+)?rm\s+-[A-Za-z]*[rf][A-Za-z]*\s+(?:--\s+)?(?:/|~|\$HOME|\.|\.\.)",
+        r"(^|[;&|\r\n])\s*(?:sudo\s+)?rm\s+-[A-Za-z]*[rf][A-Za-z]*\s+(?:--\s+)?(?:/|~|\$HOME|\.|\.\.)",
         re.IGNORECASE,
     ),
     re.compile(
-        r"(^|[;&|])\s*rmdir\s+/s\s+/q\s+(?:[A-Za-z]:\\|\\\\|%USERPROFILE%|%HOMEPATH%)",
+        r"(^|[;&|\r\n])\s*rmdir\s+/s\s+/q\s+(?:[A-Za-z]:\\|\\\\|%USERPROFILE%|%HOMEPATH%)",
         re.IGNORECASE,
     ),
     re.compile(
-        r"(^|[;&|])\s*del(?:\s+/[A-Za-z]+)+\s+(?:[A-Za-z]:\\|\\\\|%USERPROFILE%|%HOMEPATH%)",
+        r"(^|[;&|\r\n])\s*del(?:\s+/[A-Za-z]+)+\s+(?:[A-Za-z]:\\|\\\\|%USERPROFILE%|%HOMEPATH%)",
         re.IGNORECASE,
     ),
     re.compile(
-        r"(^|[;&|])\s*(?:sudo\s+)?dd\s+.*\bof=(?:/dev/|\\\\\.\\PhysicalDrive)",
+        r"(^|[;&|\r\n])\s*(?:sudo\s+)?dd\s+.*\bof=(?:/dev/|\\\\\.\\PhysicalDrive)",
         re.IGNORECASE,
     ),
-    re.compile(r"(^|[;&|])\s*(?:mkfs|format)\b", re.IGNORECASE),
+    # Match the real disk-formatting commands (`mkfs`, `mkfs.ext4`, `format`, `format.com`)
+    # as complete tokens. PowerShell presentation cmdlets such as `Format-Table` contain a
+    # hyphen immediately after the word and must not be treated as disk formatting.
+    re.compile(
+        r"(^|[;&|\r\n])\s*(?:sudo\s+)?(?:mkfs(?:\.[A-Za-z0-9]+)?|format(?:\.(?:com|exe))?)"
+        r"(?=\s|[;&|\r\n]|$)",
+        re.IGNORECASE,
+    ),
     re.compile(
         r"\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:bash|sh|zsh|pwsh|powershell)\b",
         re.IGNORECASE,
     ),
-    re.compile(r"(^|[;&|])\s*(?:sudo\s+)?ch(?:mod|own)\s+-R\b", re.IGNORECASE),
+    re.compile(r"(^|[;&|\r\n])\s*(?:sudo\s+)?ch(?:mod|own)\s+-R\b", re.IGNORECASE),
 )
 
 
@@ -48,7 +61,7 @@ def _should_check(tool_name: str) -> bool:
 
 
 def _normalize_command(value: str) -> str:
-    return " ".join(value.strip().split())
+    return "\n".join(" ".join(line.split()) for line in value.strip().splitlines())
 
 
 def _matches_dangerous_command(value: str) -> bool:
@@ -59,29 +72,21 @@ def _matches_dangerous_command(value: str) -> bool:
     return any(pattern.search(normalized) for pattern in DANGEROUS_COMMAND_PATTERNS)
 
 
+def _is_blocked_command(value: str) -> bool:
+    return _matches_dangerous_command(value) or _matches_protected_git_mutation_command(value)
+
+
 def _find_dangerous_command(value: Any) -> str | None:
-    if isinstance(value, dict):
-        for item in value.values():
-            match = _find_dangerous_command(item)
-            if match:
-                return match
-        return None
+    """Return the first executable command string in the payload that must be blocked.
 
-    if isinstance(value, list):
-        for item in value:
-            match = _find_dangerous_command(item)
-            if match:
-                return match
-        return None
-
-    if not isinstance(value, str):
-        return None
-
-    if _matches_dangerous_command(value):
-        return value
-
-    if _matches_protected_git_mutation_command(value):
-        return value
+    Only command fields (``command``, ``cmd``, ``script``, ``raw``) are inspected. Other strings
+    in the payload are inert data and are never treated as executable intent. An argv list is
+    checked as one space-joined command line first, then element by element, so the reported
+    command is the joined line when the list as a whole is what matches.
+    """
+    for command in iter_command_strings(value):
+        if _is_blocked_command(command):
+            return command
 
     return None
 

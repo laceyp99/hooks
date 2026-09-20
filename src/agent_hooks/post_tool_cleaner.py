@@ -6,7 +6,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_hooks.common import iter_string_tokens, load_stdin_payload, normalize_tool_name
+from agent_hooks.common import (
+    FILE_TARGET_FIELD_NAMES,
+    iter_field_strings,
+    iter_string_tokens,
+    load_stdin_payload,
+    normalize_tool_name,
+)
 from agent_hooks.ruff_support import repo_uses_ruff
 
 WRITE_TOOL_NAMES = {
@@ -44,32 +50,51 @@ def _should_lint(tool_name: str) -> bool:
     )
 
 
-def _collect_python_paths(value: Any, seen: set[Path]) -> None:
-    if isinstance(value, dict):
-        for item in value.values():
-            _collect_python_paths(item, seen)
-        return
+def _resolve_python_path(candidate: str, root: Path) -> Path | None:
+    """Resolve ``candidate`` to an existing Python file inside ``root``.
 
-    if isinstance(value, list):
-        for item in value:
-            _collect_python_paths(item, seen)
-        return
+    Relative paths are interpreted against ``root``. Symlinks are resolved before the
+    containment check so a link inside the repository cannot point Ruff at a file outside it.
+    """
+    normalized = candidate.strip()
+    if not normalized.replace("\\", "/").endswith(".py"):
+        return None
 
-    if not isinstance(value, str):
-        return
+    path = Path(normalized)
+    if not path.is_absolute():
+        path = root / path
 
-    normalized = value.strip().replace("\\", "/")
-    if normalized.endswith(".py"):
-        candidate = Path(value)
-        if candidate.exists() and candidate.is_file():
-            seen.add(candidate.resolve())
-            return
+    try:
+        if not path.is_file():
+            return None
+        resolved = path.resolve(strict=True)
+        resolved_root = root.resolve(strict=True)
+    except OSError:
+        return None
 
-    for token in iter_string_tokens(value):
-        if token.endswith(".py"):
-            candidate = Path(token)
-            if candidate.exists() and candidate.is_file():
-                seen.add(candidate.resolve())
+    if not resolved.is_relative_to(resolved_root):
+        return None
+
+    return resolved
+
+
+def _collect_python_paths(value: Any, seen: set[Path], root: Path) -> None:
+    """Collect edited Python files named by the tool's file-target fields.
+
+    Only known target fields (``path``, ``file_path``, ``destination``, ...) and apply_patch
+    file headers are consulted. Free text elsewhere in the payload is ignored, and any path that
+    resolves outside ``root`` is rejected so the cleaner never rewrites files outside the repo.
+    """
+    for target in iter_field_strings(value, FILE_TARGET_FIELD_NAMES):
+        resolved = _resolve_python_path(target, root)
+        if resolved is not None:
+            seen.add(resolved)
+            continue
+
+        for token in iter_string_tokens(target):
+            resolved = _resolve_python_path(token, root)
+            if resolved is not None:
+                seen.add(resolved)
 
 
 def _run_ruff(command_name: str, paths: list[Path], *args: str) -> tuple[int, str, str]:
@@ -108,12 +133,13 @@ def main() -> int:
     if not _should_lint(tool_name):
         return 0
 
-    if not repo_uses_ruff(Path.cwd()):
+    root = Path.cwd()
+    if not repo_uses_ruff(root):
         return 0
 
     tool_input = payload.get("tool_input") or payload.get("toolArgs") or {}
     paths: set[Path] = set()
-    _collect_python_paths(tool_input, paths)
+    _collect_python_paths(tool_input, paths, root)
 
     if not paths:
         return 0

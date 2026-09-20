@@ -46,7 +46,11 @@ function Write-JsonFile {
         [string] $Path
     )
 
-    $Value | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Path -Encoding utf8
+    # Claude Code and Codex parse these files as JSON. Write UTF-8 without a byte order mark;
+    # Windows PowerShell's -Encoding utf8 would prepend one.
+    $json = $Value | ConvertTo-Json -Depth 20
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, $encoding)
 }
 
 function Backup-File {
@@ -77,6 +81,23 @@ function Test-HookContainsScript {
     return $json.Contains($ScriptName)
 }
 
+# Returns an object's property names as an array. Set-StrictMode -Version Latest makes member
+# enumeration (`$o.PSObject.Properties.Name`) throw when the property collection is empty, which
+# is exactly the case for a settings file that has no `hooks` key yet. Enumerating each property
+# individually avoids that.
+function Get-PropertyNames {
+    param(
+        [AllowNull()]
+        [object] $Object
+    )
+
+    if ($null -eq $Object) {
+        return @()
+    }
+
+    return @($Object.PSObject.Properties | ForEach-Object { $_.Name })
+}
+
 function Ensure-Property {
     param(
         [Parameter(Mandatory = $true)]
@@ -89,71 +110,37 @@ function Ensure-Property {
         [object] $Value
     )
 
-    if (-not ($Object.PSObject.Properties.Name -contains $Name)) {
+    if (-not ((Get-PropertyNames -Object $Object) -contains $Name)) {
         $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value
     }
 }
 
-function Merge-CopilotConfig {
-    param(
-        [Parameter(Mandatory = $true)]
-        [object] $Existing,
-
-        [Parameter(Mandatory = $true)]
-        [object] $Template
-    )
-
-    $changed = $false
-    Ensure-Property -Object $Existing -Name "version" -Value $Template.version
-    Ensure-Property -Object $Existing -Name "hooks" -Value ([pscustomobject]@{})
-
-    foreach ($eventName in $Template.hooks.PSObject.Properties.Name) {
-        $templateHooks = @($Template.hooks.$eventName)
-        if (-not ($Existing.hooks.PSObject.Properties.Name -contains $eventName)) {
-            $Existing.hooks | Add-Member -NotePropertyName $eventName -NotePropertyValue @()
-        }
-
-        $existingHooks = @($Existing.hooks.$eventName)
-        foreach ($templateHook in $templateHooks) {
-            $scriptName = $ManagedScripts | Where-Object { Test-HookContainsScript -Hook $templateHook -ScriptName $_ } | Select-Object -First 1
-            if (-not $scriptName) {
-                continue
-            }
-
-            $alreadyInstalled = $existingHooks | Where-Object { Test-HookContainsScript -Hook $_ -ScriptName $scriptName } | Select-Object -First 1
-            if ($alreadyInstalled) {
-                continue
-            }
-
-            $existingHooks += $templateHook
-            $changed = $true
-            Write-Host "Added Copilot $eventName hook for $scriptName"
-        }
-
-        $Existing.hooks.$eventName = $existingHooks
-    }
-
-    return $changed
-}
-
-function Find-CodexContainerForTemplate {
+# Returns the existing container whose matcher equals the template's, so merged hooks keep the
+# tool coverage the template declares. A template with a matcher never merges into a container
+# with a different matcher; a template without a matcher only reuses a matcher-less container.
+function Find-ContainerForTemplate {
     param(
         [object[]] $ExistingContainers,
         [object] $TemplateContainer
     )
 
-    if ($TemplateContainer.PSObject.Properties.Name -contains "matcher") {
-        $matching = $ExistingContainers |
-            Where-Object { ($_.PSObject.Properties.Name -contains "matcher") -and $_.matcher -eq $TemplateContainer.matcher } |
-            Select-Object -First 1
-        if ($matching) {
-            return $matching
+    $templateHasMatcher = (Get-PropertyNames -Object $TemplateContainer) -contains "matcher"
+    foreach ($container in $ExistingContainers) {
+        if (-not ((Get-PropertyNames -Object $container) -contains "hooks")) {
+            continue
+        }
+
+        $containerHasMatcher = (Get-PropertyNames -Object $container) -contains "matcher"
+        if ($templateHasMatcher -and $containerHasMatcher -and $container.matcher -eq $TemplateContainer.matcher) {
+            return $container
+        }
+
+        if (-not $templateHasMatcher -and -not $containerHasMatcher) {
+            return $container
         }
     }
 
-    return $ExistingContainers |
-        Where-Object { $_.PSObject.Properties.Name -contains "hooks" } |
-        Select-Object -First 1
+    return $null
 }
 
 function Get-CodexContainerHooks {
@@ -162,57 +149,179 @@ function Get-CodexContainerHooks {
         [object] $Container
     )
 
-    if ($null -eq $Container -or -not ($Container.PSObject.Properties.Name -contains "hooks")) {
+    if ($null -eq $Container -or -not ((Get-PropertyNames -Object $Container) -contains "hooks")) {
         return @()
     }
 
     return @($Container.hooks)
 }
 
-function Merge-CodexConfig {
+# Keeps the matcher on an already-installed managed container in step with the template. Without
+# this a template matcher change never reaches an existing install: the managed hooks are already
+# present, so nothing is added and the stale matcher silently keeps its old tool coverage.
+function Sync-ContainerMatcher {
+    param(
+        [object[]] $ExistingContainers,
+        [object] $TemplateContainer,
+        [string[]] $ScriptNames,
+        [string] $Name,
+        [string] $EventName
+    )
+
+    if ($null -eq $ScriptNames -or $ScriptNames.Count -eq 0) {
+        return $false
+    }
+
+    if (-not ((Get-PropertyNames -Object $TemplateContainer) -contains "matcher")) {
+        return $false
+    }
+
+    $templateMatcher = $TemplateContainer.matcher
+    $updated = $false
+    foreach ($container in $ExistingContainers) {
+        $holdsManaged = $false
+        foreach ($existingHook in (Get-CodexContainerHooks -Container $container)) {
+            foreach ($scriptName in $ScriptNames) {
+                if (Test-HookContainsScript -Hook $existingHook -ScriptName $scriptName) {
+                    $holdsManaged = $true
+                    break
+                }
+            }
+
+            if ($holdsManaged) {
+                break
+            }
+        }
+
+        if (-not $holdsManaged) {
+            continue
+        }
+
+        if ((Get-PropertyNames -Object $container) -contains "matcher") {
+            if ($container.matcher -eq $templateMatcher) {
+                continue
+            }
+
+            $container.matcher = $templateMatcher
+        } else {
+            $container | Add-Member -NotePropertyName "matcher" -NotePropertyValue $templateMatcher
+        }
+
+        Write-Host "Updated $Name $EventName matcher to $templateMatcher"
+        $updated = $true
+    }
+
+    return $updated
+}
+
+# Keeps an already-installed managed hook entry in step with the template. Without this a
+# command change never reaches an existing install: Test-HookContainsScript only asks whether the
+# script file name appears somewhere in the entry, and both the old and the new command mention
+# run_hook.py, so nothing is ever "missing" and nothing is added. Only entries that already hold
+# a managed script are touched, and only the fields the template declares.
+function Sync-ManagedHookEntry {
+    param(
+        [object[]] $ExistingContainers,
+        [object] $TemplateHook,
+        [string] $ScriptName,
+        [string] $Name,
+        [string] $EventName
+    )
+
+    $syncFields = @("command", "commandWindows", "timeout", "statusMessage")
+    $updated = $false
+
+    foreach ($container in $ExistingContainers) {
+        foreach ($existingHook in (Get-CodexContainerHooks -Container $container)) {
+            if (-not (Test-HookContainsScript -Hook $existingHook -ScriptName $ScriptName)) {
+                continue
+            }
+
+            foreach ($field in $syncFields) {
+                if (-not ((Get-PropertyNames -Object $TemplateHook) -contains $field)) {
+                    continue
+                }
+
+                $templateValue = $TemplateHook.$field
+                if ((Get-PropertyNames -Object $existingHook) -contains $field) {
+                    if ($existingHook.$field -eq $templateValue) {
+                        continue
+                    }
+
+                    $existingHook.$field = $templateValue
+                } else {
+                    $existingHook | Add-Member -NotePropertyName $field -NotePropertyValue $templateValue
+                }
+
+                Write-Host "Updated $Name $EventName $field for $ScriptName"
+                $updated = $true
+            }
+        }
+    }
+
+    return $updated
+}
+
+# Merges hook containers shaped like { "hooks": { "<Event>": [ { "matcher": ..., "hooks": [...] } ] } }.
+# Both Codex (%USERPROFILE%\.codex\hooks.json) and Claude Code (%USERPROFILE%\.claude\settings.json)
+# use this layout.
+function Merge-ContainerConfig {
     param(
         [Parameter(Mandatory = $true)]
         [object] $Existing,
 
         [Parameter(Mandatory = $true)]
-        [object] $Template
+        [object] $Template,
+
+        [string] $Name = "hook"
     )
 
     $changed = $false
     Ensure-Property -Object $Existing -Name "hooks" -Value ([pscustomobject]@{})
 
-    foreach ($eventName in $Template.hooks.PSObject.Properties.Name) {
+    foreach ($eventName in (Get-PropertyNames -Object $Template.hooks)) {
         $templateContainers = @($Template.hooks.$eventName)
-        if (-not ($Existing.hooks.PSObject.Properties.Name -contains $eventName)) {
+        if (-not ((Get-PropertyNames -Object $Existing.hooks) -contains $eventName)) {
             $Existing.hooks | Add-Member -NotePropertyName $eventName -NotePropertyValue @()
         }
 
         $existingContainers = @($Existing.hooks.$eventName)
         foreach ($templateContainer in $templateContainers) {
             $missingHooks = @()
+            $templateScriptNames = @()
             foreach ($templateHook in @($templateContainer.hooks)) {
                 $scriptName = $ManagedScripts | Where-Object { Test-HookContainsScript -Hook $templateHook -ScriptName $_ } | Select-Object -First 1
                 if (-not $scriptName) {
                     continue
                 }
 
+                $templateScriptNames += $scriptName
+
                 $alreadyInstalled = $existingContainers |
                     ForEach-Object { Get-CodexContainerHooks -Container $_ } |
                     Where-Object { Test-HookContainsScript -Hook $_ -ScriptName $scriptName } |
                     Select-Object -First 1
                 if ($alreadyInstalled) {
+                    if (Sync-ManagedHookEntry -ExistingContainers $existingContainers -TemplateHook $templateHook -ScriptName $scriptName -Name $Name -EventName $eventName) {
+                        $changed = $true
+                    }
+
                     continue
                 }
 
                 $missingHooks += $templateHook
-                Write-Host "Added Codex $eventName hook for $scriptName"
+                Write-Host "Added $Name $eventName hook for $scriptName"
+            }
+
+            if (Sync-ContainerMatcher -ExistingContainers $existingContainers -TemplateContainer $templateContainer -ScriptNames $templateScriptNames -Name $Name -EventName $eventName) {
+                $changed = $true
             }
 
             if ($missingHooks.Count -eq 0) {
                 continue
             }
 
-            $targetContainer = Find-CodexContainerForTemplate -ExistingContainers $existingContainers -TemplateContainer $templateContainer
+            $targetContainer = Find-ContainerForTemplate -ExistingContainers $existingContainers -TemplateContainer $templateContainer
             if ($targetContainer) {
                 $targetHooks = @($targetContainer.hooks)
                 $targetContainer.hooks = @($targetHooks + $missingHooks)
@@ -242,7 +351,11 @@ function Install-Config {
         [string] $DestinationPath,
 
         [Parameter(Mandatory = $true)]
-        [scriptblock] $Merge
+        [scriptblock] $Merge,
+
+        # Printed whenever this config is created or changed. Used to tell Codex users that a
+        # changed hook command invalidates the trust hash Codex keeps in config.toml.
+        [string] $WriteNote = ""
     )
 
     New-Item -ItemType Directory -Force (Split-Path -Parent $DestinationPath) | Out-Null
@@ -250,6 +363,10 @@ function Install-Config {
     if (-not (Test-Path -LiteralPath $DestinationPath)) {
         Copy-Item -LiteralPath $TemplatePath -Destination $DestinationPath
         Write-Host "Created $Name config at $DestinationPath"
+        if ($WriteNote) {
+            Write-Host $WriteNote
+        }
+
         return
     }
 
@@ -260,7 +377,7 @@ function Install-Config {
 
     $existing = Read-JsonFile -Path $DestinationPath
     $template = Read-JsonFile -Path $TemplatePath
-    $changed = & $Merge $existing $template
+    $changed = & $Merge $existing $template $Name
 
     if (-not $changed) {
         Write-Host "$Name config already has the Agent Hooks entries."
@@ -270,6 +387,9 @@ function Install-Config {
     Backup-File -Path $DestinationPath
     Write-JsonFile -Value $existing -Path $DestinationPath
     Write-Host "Merged $Name config at $DestinationPath"
+    if ($WriteNote) {
+        Write-Host $WriteNote
+    }
 }
 
 function Copy-ManagedBundle {
@@ -306,41 +426,58 @@ function Install-PiBridge {
         [string] $DestinationPath
     )
 
-    if (-not (Ask-YesNo "Install Pi bridge extension if it is missing?")) {
+    if (-not (Ask-YesNo "Refresh managed Pi bridge extension?")) {
         Write-Host "Skipped Pi bridge extension."
         return
     }
 
     New-Item -ItemType Directory -Force (Split-Path -Parent $DestinationPath) | Out-Null
-    if (Test-Path -LiteralPath $DestinationPath) {
-        Write-Host "Pi bridge already exists at $DestinationPath; leaving it unchanged."
+    if (-not (Test-Path -LiteralPath $DestinationPath)) {
+        Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath
+        Write-Host "Installed Pi bridge extension at $DestinationPath"
         return
     }
 
-    Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath
-    Write-Host "Installed Pi bridge extension at $DestinationPath"
+    $sourceHash = (Get-FileHash -LiteralPath $SourcePath -Algorithm SHA256).Hash
+    $destinationHash = (Get-FileHash -LiteralPath $DestinationPath -Algorithm SHA256).Hash
+    if ($sourceHash -eq $destinationHash) {
+        Write-Host "Pi bridge at $DestinationPath is already up to date."
+        return
+    }
+
+    # The bridge is a managed runtime file. Back up the existing copy so local edits are not
+    # lost, then replace it with the checked-in version.
+    Backup-File -Path $DestinationPath
+    Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath -Force
+    Write-Host "Refreshed Pi bridge extension at $DestinationPath"
 }
 
-$copilotHooksDir = Join-Path $env:USERPROFILE ".copilot\hooks"
+$claudeHooksDir = Join-Path $env:USERPROFILE ".claude\hooks"
 $codexHooksDir = Join-Path $env:USERPROFILE ".codex\hooks"
 $piExtensionPath = Join-Path $env:USERPROFILE ".pi\agent\extensions\agent-hooks.ts"
 
+# Claude Code reads hooks from its user settings file. Only the "hooks" key is managed here;
+# every other setting in an existing settings.json is preserved.
 Install-Config `
-    -Name "Copilot" `
-    -TemplatePath (Join-Path $RepoRoot ".copilot\hooks\hooks.example.json") `
-    -DestinationPath (Join-Path $copilotHooksDir "hooks.json") `
-    -Merge ${function:Merge-CopilotConfig}
+    -Name "Claude Code" `
+    -TemplatePath (Join-Path $RepoRoot ".claude\settings.example.json") `
+    -DestinationPath (Join-Path $env:USERPROFILE ".claude\settings.json") `
+    -Merge ${function:Merge-ContainerConfig}
 
 Copy-ManagedBundle `
-    -Name "Copilot" `
-    -SourceHooksDir (Join-Path $RepoRoot ".copilot\hooks") `
-    -DestinationHooksDir $copilotHooksDir
+    -Name "Claude Code" `
+    -SourceHooksDir (Join-Path $RepoRoot ".claude\hooks") `
+    -DestinationHooksDir $claudeHooksDir
 
+# Codex keeps a trusted_hash per hook under [hooks.state] in config.toml. Any change to a hook
+# command invalidates it, and an untrusted hook is silently skipped: the session runs with no
+# hook output and nothing says a guard was bypassed. Say so whenever this file is written.
 Install-Config `
     -Name "Codex" `
     -TemplatePath (Join-Path $RepoRoot ".codex\hooks.example.json") `
     -DestinationPath (Join-Path $env:USERPROFILE ".codex\hooks.json") `
-    -Merge ${function:Merge-CodexConfig}
+    -Merge ${function:Merge-ContainerConfig} `
+    -WriteNote "  Note: Codex will treat these hooks as new or modified and will not run them until you review and trust them in the Codex TUI."
 
 Copy-ManagedBundle `
     -Name "Codex" `

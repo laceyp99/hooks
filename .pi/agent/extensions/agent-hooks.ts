@@ -19,7 +19,7 @@ type HookResponse = {
 };
 
 const DEFAULT_HOOKS_ROOT = join(homedir(), "code", "agent-hooks");
-const BUNDLE_DIRS = [".codex", ".copilot"] as const;
+const BUNDLE_DIRS = [".codex", ".claude"] as const;
 const pendingToolInputs = new Map<string, Record<string, unknown>>();
 
 function resolveHooksRoot(): string | undefined {
