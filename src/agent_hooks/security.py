@@ -144,9 +144,51 @@ ENV_ACCESS_COMMANDS = frozenset(
     }
 )
 
+# Shells and interpreters carry another command line inside an argument this hook cannot parse.
+# Treating them as access verbs keeps `bash -c "cat <file>"` and `python -c "open('<file>')"`
+# denied on the name alone, which is what they did before the access gate existed.
+INTERPRETER_COMMANDS = frozenset(
+    {
+        "bash",
+        "bun",
+        "cmd",
+        "dash",
+        "deno",
+        "fish",
+        "irb",
+        "ksh",
+        "node",
+        "perl",
+        "php",
+        "powershell",
+        "pwsh",
+        "py",
+        "python",
+        "python2",
+        "python3",
+        "ruby",
+        "sh",
+        "zsh",
+    }
+)
+
 # ``git`` alone is not an access verb, or every commit message naming a protected file would be
 # denied. Only these subcommands touch the named file.
 GIT_ACCESS_SUBCOMMANDS = frozenset({"add", "checkout", "mv", "restore", "rm", "stage"})
+
+# Git global options that consume the next word, so the subcommand search can step past them.
+# Options spelled ``--flag=value`` carry their value already and need no special handling.
+GIT_VALUE_FLAGS = frozenset(
+    {
+        "-C",
+        "-c",
+        "--config-env",
+        "--exec-path",
+        "--git-dir",
+        "--namespace",
+        "--work-tree",
+    }
+)
 
 # Splits a command line into the segments a shell would run separately.
 COMMAND_SEGMENT_RE = re.compile(r"[;&|\r\n]+")
@@ -272,37 +314,81 @@ def _find_protected_git_path(value: Any) -> str | None:
     return match
 
 
+def _normalize_program_token(token: str) -> str:
+    stripped = token.strip("\"'")
+    if not stripped:
+        return ""
+
+    name = PurePath(stripped.replace("\\", "/")).name.lower()
+    if name.endswith(".exe"):
+        name = name[: -len(".exe")]
+
+    return name
+
+
+def _segment_words(segment: str) -> list[str]:
+    """Return a segment's words with leading ``VAR=value`` assignments and ``sudo`` dropped.
+
+    Stripping the prefixes here rather than in the caller keeps the program and its subcommand
+    adjacent, so ``sudo git add <file>`` reads the same as ``git add <file>``.
+    """
+    words: list[str] = []
+    for token in segment.split():
+        if not words and ENV_ASSIGNMENT_RE.match(token):
+            continue
+
+        normalized = _normalize_program_token(token)
+        if not words and normalized == "sudo":
+            continue
+
+        if not normalized and not words:
+            continue
+
+        words.append(token)
+
+    return words
+
+
 def _segment_program(segment: str) -> str:
     """Return the program a shell segment runs, lowercased and stripped of path and suffix."""
-    for token in segment.split():
-        if ENV_ASSIGNMENT_RE.match(token):
-            continue
+    words = _segment_words(segment)
+    return _normalize_program_token(words[0]) if words else ""
 
-        stripped = token.strip("\"'")
-        if not stripped:
-            continue
 
-        name = PurePath(stripped.replace("\\", "/")).name.lower()
-        if name.endswith(".exe"):
-            name = name[: -len(".exe")]
+def _git_subcommand(words: list[str]) -> str:
+    """Return the subcommand in ``git [global options] <subcommand> ...``.
 
-        if name == "sudo":
-            continue
+    Global options have to be stepped over, and the ones taking a separate value take the word
+    after them with it, or ``git -C . add <file>`` would read ``.`` as the subcommand.
+    """
+    index = 1
+    while index < len(words):
+        word = words[index]
+        if not word.startswith("-"):
+            return _normalize_program_token(word)
 
-        return name
+        takes_value = word in GIT_VALUE_FLAGS
+        index += 2 if takes_value else 1
 
     return ""
 
 
 def _segment_accesses_files(segment: str) -> bool:
-    program = _segment_program(segment)
+    words = _segment_words(segment)
+    if not words:
+        return False
+
+    program = _normalize_program_token(words[0])
     if not program:
         return False
 
+    if program in INTERPRETER_COMMANDS:
+        # An interpreter's argument is another command line this hook cannot parse. Reading the
+        # whole segment keeps `bash -c "cat <file>"` denied; narrowing it would open a bypass.
+        return True
+
     if program == "git":
-        tokens = [token for token in segment.split() if not token.startswith("-")]
-        subcommand = tokens[1].strip("\"'").lower() if len(tokens) > 1 else ""
-        return subcommand in GIT_ACCESS_SUBCOMMANDS
+        return _git_subcommand(words) in GIT_ACCESS_SUBCOMMANDS
 
     return program in ENV_ACCESS_COMMANDS
 

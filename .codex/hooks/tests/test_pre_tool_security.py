@@ -207,6 +207,38 @@ def test_git_is_an_access_verb_only_for_subcommands_that_touch_files(pre_tool_se
     assert find(f"git checkout -- {target}") == target
 
 
+def test_interpreters_are_treated_as_access(pre_tool_security) -> None:
+    """A shell or interpreter carries a command line this hook cannot parse.
+
+    Narrowing the check to the interpreter's own arguments would turn every one of these into a
+    bypass, so the whole segment is read.
+    """
+    find = pre_tool_security._find_env_access_in_command
+    target = _dot("env")
+
+    assert find(f'bash -c "cat {target}"') == target
+    assert find(f"sh -c 'cat {target}'") == target
+    assert find(f'powershell -Command "Get-Content {target}"') == target
+    assert find(f'pwsh -Command "Get-Content {target}"') == target
+    assert find(f"python -c \"open('{target}').read()\"") == target
+    assert find(f'/bin/bash -c "cat {target}"') == target
+    assert find("python -m pytest -q") is None
+    assert find('bash -c "ls -a"') is None
+
+
+def test_git_subcommand_is_found_past_prefixes_and_global_options(pre_tool_security) -> None:
+    """``sudo``, ``VAR=value`` and ``git -C <dir>`` must not hide the subcommand."""
+    find = pre_tool_security._find_env_access_in_command
+    target = _dot("env")
+
+    assert find(f"sudo git add {target}") == target
+    assert find(f"GIT_PAGER=cat git add {target}") == target
+    assert find(f"git -C . add {target}") == target
+    assert find(f"git --git-dir=/tmp/r/.git add {target}") == target
+    assert find(f'sudo git commit -m "note {target}"') is None
+    assert find(f'git -c user.email=t@t commit -m "note {target}"') is None
+
+
 def test_access_is_detected_past_prefixes_and_program_paths(pre_tool_security) -> None:
     find = pre_tool_security._find_env_access_in_command
     target = _dot("env")
