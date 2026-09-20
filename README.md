@@ -46,7 +46,7 @@ Claude Code and Pi have no equivalent step.
 
 ### 5. Verify it works
 
-Run this from **Git Bash** (not PowerShell — see [the note below](#why-git-bash-for-testing)):
+Run this from Git Bash, or from PowerShell with the equivalent quoting:
 
 ```bash
 runner="$HOME/.claude/hooks/run_hook.py"
@@ -263,9 +263,17 @@ Test-Path "$env:USERPROFILE\src\agent_hooks\common.py"
 
 `install.ps1` is interactive by design and cannot run under `powershell -NonInteractive`; `Read-Host` throws instead of taking the default. Run it in a normal PowerShell window.
 
-### Why Git Bash for testing
+### The hook reports that it could not parse the payload
 
-PowerShell 5.1 prepends a UTF-8 byte order mark when it pipes a string into a native program. The hook cannot parse the resulting JSON, treats the payload as empty, and **allows the action** — so a PowerShell-piped test appears to pass even when the rule would have denied it. This affects hand-testing only; Claude Code and Codex write clean UTF-8 to the hook. Test from Git Bash, or trust a real session over a piped snippet.
+If a hook prints this on stderr, it saw something it could not read and **allowed the tool call unchecked**:
+
+```
+agent-hooks: could not parse the hook payload on stdin; allowing the tool call unchecked.
+```
+
+A hook that cannot see the tool call has no grounds to deny it, so this is deliberately fail-open — failing closed would break every session the moment a host changed its wire format. The warning exists so the decision is visible rather than silent. If you see it during normal use, the host is sending something unexpected and it is worth reporting.
+
+A leading byte order mark is **not** a cause of this. PowerShell prepends one when piping a string into a native program, and the payload reader consumes it, so hand-testing from either shell gives the real answer.
 
 ### A legitimate command was denied
 

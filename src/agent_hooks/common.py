@@ -55,10 +55,49 @@ PATCH_TARGET_RE = re.compile(
 )
 
 
+def _read_stdin_text() -> str:
+    """Read the hook payload from stdin as text, tolerating a leading byte order mark.
+
+    Reading the binary buffer first and decoding with ``utf-8-sig`` means a BOM is consumed
+    rather than left in front of the JSON. PowerShell prepends one when a string is piped into a
+    native program, and ``json`` rejects it, so without this the payload parses as empty and
+    every guard silently allows the action. Text streams without a ``buffer`` (a test's
+    ``StringIO``) fall back to a decoded read, where a BOM arrives as ``\\ufeff``.
+    """
+    stdin_buffer = getattr(sys.stdin, "buffer", None)
+    if stdin_buffer is not None:
+        try:
+            raw = stdin_buffer.read()
+        except (OSError, ValueError):
+            raw = None
+
+        if isinstance(raw, bytes):
+            return raw.decode("utf-8-sig", errors="replace")
+        if isinstance(raw, str):
+            return raw.lstrip("﻿")
+
+    data = sys.stdin.read()
+    if isinstance(data, bytes):
+        return data.decode("utf-8-sig", errors="replace")
+    return data.lstrip("﻿")
+
+
 def load_stdin_payload() -> dict[str, Any]:
+    """Return the hook payload, or an empty mapping when stdin cannot be understood.
+
+    An unreadable payload still allows the action: a hook that cannot see the tool call has no
+    grounds to deny it, and failing closed would break every session the moment a host changed
+    its wire format. The warning on stderr keeps that decision visible in the host's debug log
+    instead of silent.
+    """
+    text = _read_stdin_text()
     try:
-        payload = json.load(sys.stdin)
-    except json.JSONDecodeError:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        sys.stderr.write(
+            "agent-hooks: could not parse the hook payload on stdin; allowing the tool call "
+            "unchecked. This hook enforced nothing for this call.\n"
+        )
         return {}
     return payload if isinstance(payload, dict) else {}
 

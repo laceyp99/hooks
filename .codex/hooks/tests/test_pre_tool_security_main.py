@@ -18,6 +18,76 @@ def _run_main(module, monkeypatch, payload_text: str):
     return exit_code, stdout.getvalue()
 
 
+class _BinaryStdin:
+    """A stdin whose bytes are only reachable through ``buffer``, like a real pipe.
+
+    Reading the text stream raises, so a test fails loudly if the payload reader stops
+    preferring the binary buffer and silently re-introduces the decoding bug.
+    """
+
+    def __init__(self, raw: bytes) -> None:
+        self.buffer = io.BytesIO(raw)
+
+    def read(self):  # pragma: no cover - only reached on regression
+        raise AssertionError("payload was read as text despite a binary buffer")
+
+
+def _run_main_with_stdin(module, monkeypatch, stdin) -> tuple[int, str, str]:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    monkeypatch.setattr(module.sys, "stdin", stdin)
+    monkeypatch.setattr(module.sys, "stdout", stdout)
+    monkeypatch.setattr(module.sys, "stderr", stderr)
+    exit_code = module.main()
+    return exit_code, stdout.getvalue(), stderr.getvalue()
+
+
+def test_main_denies_through_a_byte_order_mark(pre_tool_security, monkeypatch) -> None:
+    """A BOM in front of the JSON must not disable the guard.
+
+    PowerShell prepends one when a string is piped into a native program. Before this was
+    handled the payload parsed as empty and the hook allowed the call.
+    """
+    target = _dot("env")
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": f"cat {target}"}})
+    stdin = _BinaryStdin(b"\xef\xbb\xbf" + payload.encode("utf-8"))
+
+    exit_code, output, _ = _run_main_with_stdin(pre_tool_security, monkeypatch, stdin)
+    message = json.loads(output)
+
+    assert exit_code == 0
+    assert message["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert target in message["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_main_denies_through_a_decoded_byte_order_mark(pre_tool_security, monkeypatch) -> None:
+    """Same payload, but already decoded to text with the mark intact."""
+    target = _dot("env")
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": f"cat {target}"}})
+
+    exit_code, output = _run_main(pre_tool_security, monkeypatch, "\ufeff" + payload)
+    message = json.loads(output)
+
+    assert exit_code == 0
+    assert message["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_main_warns_when_the_payload_cannot_be_parsed(pre_tool_security, monkeypatch) -> None:
+    """An unreadable payload still allows the call, but says so on stderr.
+
+    A hook that cannot see the tool call has no grounds to deny it, so this stays fail-open.
+    The warning is what keeps that decision visible in the host's debug log.
+    """
+    exit_code, output, errors = _run_main_with_stdin(
+        pre_tool_security, monkeypatch, io.StringIO("not json at all")
+    )
+
+    assert exit_code == 0
+    assert output == ""
+    assert "could not parse" in errors
+    assert "enforced nothing" in errors
+
+
 def test_main_skips_non_file_tools(pre_tool_security, monkeypatch) -> None:
     payload = {"tool_name": "shell", "tool_input": {"file_path": "notes.txt"}}
 
