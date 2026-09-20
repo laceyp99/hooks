@@ -4,8 +4,6 @@ Local guardrails for coding agents. The hooks block a small set of genuinely dan
 
 One set of Python hook logic is shared by three harnesses: **Claude Code**, **Codex**, and **Pi**. Each harness gets a thin wrapper; the behavior lives once, under `src/agent_hooks/`.
 
----
-
 ## Quick start
 
 ### 1. Check the prerequisites
@@ -64,8 +62,6 @@ echo '{"tool_name":"Bash","tool_input":{"command":"git commit -m \"document .env
 The first prints a `permissionDecision: deny` payload naming `.env`. The second prints nothing, which means allowed. If both print nothing, the hooks are not wired up — see [Troubleshooting](#troubleshooting).
 
 Swap `.claude` for `.codex` to check the Codex bundle the same way.
-
----
 
 ## What the hooks do
 
@@ -146,8 +142,6 @@ A repo opts in via any of:
 
 Each hook launch goes through a bootstrapper that picks a Python in a predictable order: the project virtual environment first, then the current interpreter, with a Windows fallback to `py -3.10` if the active interpreter is too old.
 
----
-
 ## Known limits
 
 Worth knowing before you rely on these:
@@ -157,8 +151,6 @@ Worth knowing before you rely on these:
 - **The shell-command check uses a list of access verbs.** An unusual reader not on that list will pass. Tools that name a file in a dedicated field have no such gap.
 - **A secret committed once stays in history.** Deleting it in a later commit does not remove it from earlier commits. If it was pushed, rotate the secret; cleaning history needs a rewrite.
 - **These are guardrails, not a security boundary.** They exist to stop an agent's honest mistakes, not to withstand a determined adversary.
-
----
 
 ## Updating
 
@@ -176,50 +168,6 @@ Two things to know:
 
 - The installer **reconciles managed hook entries** with the template, so a corrected command or matcher reaches an existing install. If you hand-edited a managed hook's command, that edit is overwritten. Your own unmanaged hooks are never touched, and a backup is written first.
 - **Codex re-trust.** Any change to a hook command invalidates Codex's trust hash, so re-approve the hooks in the Codex TUI after an update. Until you do, Codex skips them silently.
-
----
-
-## Troubleshooting
-
-### The hooks never fire
-
-1. **Codex:** almost always the trust prompt. Open the TUI and approve the hooks. There is no warning when Codex skips an untrusted hook.
-2. **Claude Code:** confirm the `hooks` key exists in `%USERPROFILE%\.claude\settings.json` and that `%USERPROFILE%\.claude\hooks\run_hook.py` is present. Start with `claude --debug` and look for "Hook script not found" or a spawn failure.
-3. Confirm `python --version` reports 3.10 or newer *in the shell the agent uses*, which may not be the shell you tested in.
-4. Run the [verification snippets](#5-verify-it-works). If they deny correctly, the hooks work and the problem is registration, not logic.
-
-### "Hook script not found"
-
-The installed bundle is incomplete. Re-run `.\install.ps1` and answer `y` to the "Refresh managed runtime files" prompts. All four of these must exist:
-
-```powershell
-Test-Path "$env:USERPROFILE\.claude\hooks\run_hook.py"
-Test-Path "$env:USERPROFILE\.claude\hooks\scripts\pre_tool_security.py"
-Test-Path "$env:USERPROFILE\.codex\hooks\run_hook.py"
-Test-Path "$env:USERPROFILE\src\agent_hooks\common.py"
-```
-
-### The installer stops on a prompt
-
-`install.ps1` is interactive by design and cannot run under `powershell -NonInteractive`; `Read-Host` throws instead of taking the default. Run it in a normal PowerShell window.
-
-### Why Git Bash for testing
-
-PowerShell 5.1 prepends a UTF-8 byte order mark when it pipes a string into a native program. The hook cannot parse the resulting JSON, treats the payload as empty, and **allows the action** — so a PowerShell-piped test appears to pass even when the rule would have denied it. This affects hand-testing only; Claude Code and Codex write clean UTF-8 to the hook. Test from Git Bash, or trust a real session over a piped snippet.
-
-### A legitimate command was denied
-
-Check it against [What the hooks do](#what-the-hooks-do). If a command that only *mentions* a protected name was blocked, or an ordinary edit was refused, that is a bug worth reporting — include the exact command and the full deny message.
-
-### Turning off the end-of-session rewrites
-
-```powershell
-$env:AGENT_HOOKS_STOP_FIX = "0"
-```
-
-Set it in the environment the agent runs in. Checks still run; nothing is rewritten.
-
----
 
 ## Configuration
 
@@ -243,8 +191,6 @@ Set it in the environment the agent runs in. Checks still run; nothing is rewrit
 | `AGENT_HOOKS_PYTHON` | Python executable to use, if `python.exe` is not on `PATH` |
 
 Unlike the other two harnesses, the installed Pi extension is only a TypeScript bridge; it calls back into this source checkout to run the Python hooks. Keep the checkout in place.
-
----
 
 ## Manual installation
 
@@ -293,7 +239,45 @@ Copy-Item -Force ".pi\agent\extensions\agent-hooks.ts" "$env:USERPROFILE\.pi\age
 Back up any existing bridge first if you have local edits.
 </details>
 
----
+## Troubleshooting
+
+### The hooks never fire
+
+1. **Codex:** almost always the trust prompt. Open the TUI and approve the hooks. There is no warning when Codex skips an untrusted hook.
+2. **Claude Code:** confirm the `hooks` key exists in `%USERPROFILE%\.claude\settings.json` and that `%USERPROFILE%\.claude\hooks\run_hook.py` is present. Start with `claude --debug` and look for "Hook script not found" or a spawn failure.
+3. Confirm `python --version` reports 3.10 or newer *in the shell the agent uses*, which may not be the shell you tested in.
+4. Run the [verification snippets](#5-verify-it-works). If they deny correctly, the hooks work and the problem is registration, not logic.
+
+### "Hook script not found"
+
+The installed bundle is incomplete. Re-run `.\install.ps1` and answer `y` to the "Refresh managed runtime files" prompts. All four of these must exist:
+
+```powershell
+Test-Path "$env:USERPROFILE\.claude\hooks\run_hook.py"
+Test-Path "$env:USERPROFILE\.claude\hooks\scripts\pre_tool_security.py"
+Test-Path "$env:USERPROFILE\.codex\hooks\run_hook.py"
+Test-Path "$env:USERPROFILE\src\agent_hooks\common.py"
+```
+
+### The installer stops on a prompt
+
+`install.ps1` is interactive by design and cannot run under `powershell -NonInteractive`; `Read-Host` throws instead of taking the default. Run it in a normal PowerShell window.
+
+### Why Git Bash for testing
+
+PowerShell 5.1 prepends a UTF-8 byte order mark when it pipes a string into a native program. The hook cannot parse the resulting JSON, treats the payload as empty, and **allows the action** — so a PowerShell-piped test appears to pass even when the rule would have denied it. This affects hand-testing only; Claude Code and Codex write clean UTF-8 to the hook. Test from Git Bash, or trust a real session over a piped snippet.
+
+### A legitimate command was denied
+
+Check it against [What the hooks do](#what-the-hooks-do). If a command that only *mentions* a protected name was blocked, or an ordinary edit was refused, that is a bug worth reporting — include the exact command and the full deny message.
+
+### Turning off the end-of-session rewrites
+
+```powershell
+$env:AGENT_HOOKS_STOP_FIX = "0"
+```
+
+Set it in the environment the agent runs in. Checks still run; nothing is rewritten.
 
 ## Uninstall
 
@@ -307,61 +291,3 @@ Remove-Item -Force "$env:USERPROFILE\.pi\agent\extensions\agent-hooks.ts"
 ```
 
 Your timestamped `.bak-*` files are left in place; delete them once you are satisfied.
-
----
-
-## Development
-
-```bash
-python -m pip install -e ".[dev]"   # test and lint tools
-pytest -q --import-mode=importlib   # test suite
-python -m ruff check .              # lint
-python -m ruff format --check .     # formatting, check only
-```
-
-Use `python -m ruff format .` to apply formatting rather than just check it.
-
-To let the hooks reuse a project's dependencies, create a virtual environment in that project:
-
-```bash
-python -m venv venv
-```
-
----
-
-## Repository layout
-
-Each harness gets a thin wrapper folder; the real behavior lives once under `src/agent_hooks/`.
-
-```text
-hooks/
-├─ .claude/
-│  ├─ settings.example.json        # Sample Claude Code settings containing the hooks block
-│  └─ hooks/
-│     ├─ run_hook.py               # Picks a compatible Python, launches one hook script
-│     ├─ scripts/                  # Thin wrappers around the shared logic
-│     └─ tests/                    # Tests for the Claude Code bundle
-├─ .codex/
-│  ├─ hooks.example.json           # Sample Codex config
-│  └─ hooks/
-│     ├─ run_hook.py
-│     ├─ scripts/
-│     └─ tests/                    # Tests for the Codex bundle
-├─ .pi/agent/extensions/
-│  └─ agent-hooks.ts               # Pi bridge that calls back into this checkout
-├─ src/agent_hooks/                # Shared logic used by every bundle
-│  ├─ bootstrap.py                 # Interpreter selection
-│  ├─ common.py                    # Payload parsing and field extraction
-│  ├─ dangerous_commands.py        # Destructive-command detection
-│  ├─ post_tool_cleaner.py         # Post-edit Ruff cleanup
-│  ├─ ruff_support.py              # Ruff opt-in detection
-│  ├─ security.py                  # Secret-file and Git-internals checks
-│  └─ session_stop.py              # End-of-session sweep
-├─ install.ps1                     # Windows installer
-├─ pyproject.toml                  # Packaging, pytest, and Ruff settings
-└─ README.md                       # This guide
-```
-
-Installed, the Claude Code and Codex bundles mirror the same `hooks/` structure in your user profile, with a copy of `src/` beside them at `%USERPROFILE%\src\` so the wrappers can bootstrap before importing the shared logic.
-
-The two bundles do not need to be perfectly symmetric. They need to work with the command format and install location each harness requires.
