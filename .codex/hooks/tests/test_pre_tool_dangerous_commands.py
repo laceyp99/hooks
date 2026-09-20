@@ -104,33 +104,46 @@ def test_ignores_non_string_nested_values(pre_tool_dangerous_commands) -> None:
     assert pre_tool_dangerous_commands._find_dangerous_command(payload) is None
 
 
-def test_argv_lists_are_matched_as_one_command(pre_tool_dangerous_commands) -> None:
+def test_command_fields_are_inspected_as_strings_only(pre_tool_dangerous_commands) -> None:
+    """Command fields carry one string on every host checked.
+
+    Claude Code's Bash and PowerShell tools send a string; Codex routes its shell tool through
+    ``powershell.exe -Command '<string>'`` and reports the tool as ``Bash``. No host was found
+    that emits an argv vector, so nothing joins list elements into a command line.
+    """
     find = pre_tool_dangerous_commands._find_dangerous_command
 
-    assert find({"command": ["rm", "-rf", "/"]}) == "rm -rf /"
-    assert find({"command": ["sudo", "dd", "if=/dev/zero", "of=/dev/sda"]}) == (
+    assert find({"command": "rm -rf /"}) == "rm -rf /"
+    assert find({"command": "sudo dd if=/dev/zero of=/dev/sda"}) == (
         "sudo dd if=/dev/zero of=/dev/sda"
     )
+    assert find({"command": "bash -lc 'echo safe; rm -rf /'"}) is not None
 
 
-def test_argv_wrapped_scripts_are_still_inspected(pre_tool_dangerous_commands) -> None:
-    payload = {"command": ["bash", "-lc", "echo safe; rm -rf /"]}
+def test_apply_patch_documents_are_not_command_lines(pre_tool_dangerous_commands) -> None:
+    """A patch body is data. Text inside it must not be read as a command to run."""
+    patch = "\n".join(
+        [
+            "*** Begin Patch",
+            "*** Update File: docs/safety.md",
+            "@@",
+            "-Never run rm -rf / on a machine you care about.",
+            "+Never run rm -rf / on any machine.",
+            "*** End Patch",
+        ]
+    )
 
-    result = pre_tool_dangerous_commands._find_dangerous_command(payload)
-
-    assert result is not None
-    assert "rm -rf /" in result
+    assert pre_tool_dangerous_commands._find_dangerous_command({"command": patch}) is None
 
 
 @pytest.mark.parametrize(
-    "argv",
+    "command",
     [
-        ["git", "log", "--format=%H"],
-        ["Format-Table"],
-        ["rm", "-rf", "build"],
-        ["python", "-m", "pytest", "-q"],
-        ["echo", "rm", "-rf"],
+        "git log --format=%H",
+        "Format-Table",
+        "rm -rf build",
+        "python -m pytest -q",
     ],
 )
-def test_safe_argv_lists_are_allowed(pre_tool_dangerous_commands, argv) -> None:
-    assert pre_tool_dangerous_commands._find_dangerous_command({"command": argv}) is None
+def test_safe_commands_are_allowed(pre_tool_dangerous_commands, command) -> None:
+    assert pre_tool_dangerous_commands._find_dangerous_command({"command": command}) is None

@@ -187,27 +187,54 @@ def test_notebook_path_is_a_file_target(pre_tool_security, git_internal_path) ->
     assert pre_tool_security._find_protected_git_path(payload) == git_internal_path("config")
 
 
-def test_argv_lists_are_checked_as_one_git_mutation_command(
-    pre_tool_security, git_internal_path
-) -> None:
-    target = git_internal_path("config")
-
-    result = pre_tool_security._find_protected_git_mutation_command(
-        {"command": ["rm", "-rf", target]}
-    )
-
-    assert result == f"rm -rf {target}"
-
-
-def test_safe_argv_lists_are_not_git_mutations(pre_tool_security, git_internal_path) -> None:
+def test_safe_commands_are_not_git_mutations(pre_tool_security, git_internal_path) -> None:
     payloads = [
-        {"command": ["git", "status"]},
-        {"command": ["cat", git_internal_path("HEAD")]},
-        {"command": ["rm", "-rf", "build"]},
+        {"command": "git status"},
+        {"command": f"cat {git_internal_path('HEAD')}"},
+        {"command": "rm -rf build"},
     ]
 
     for payload in payloads:
         assert pre_tool_security._find_protected_git_mutation_command(payload) is None
+
+
+def test_patch_in_a_command_field_reports_only_its_header_target(
+    pre_tool_security, git_internal_path
+) -> None:
+    """Codex sends apply_patch documents in ``command``, not ``patch``.
+
+    The deny reason must name the file the patch targets, not echo the whole document back.
+    """
+    target = git_internal_path("config")
+    patch = "\n".join(
+        [
+            "*** Begin Patch",
+            f"*** Update File: {target}",
+            "@@",
+            "+# note",
+            "*** End Patch",
+        ]
+    )
+
+    assert pre_tool_security._find_protected_git_path({"command": patch}) == target
+
+
+def test_patch_body_mentions_do_not_block_an_unrelated_file(
+    pre_tool_security, git_internal_path
+) -> None:
+    """Editing prose that merely names a protected path is an ordinary edit."""
+    patch = "\n".join(
+        [
+            "*** Begin Patch",
+            "*** Update File: notes.md",
+            "@@",
+            f"-This project never touches {git_internal_path('config')} directly.",
+            f"+This project never touches {git_internal_path('config')} at all.",
+            "*** End Patch",
+        ]
+    )
+
+    assert pre_tool_security._find_protected_git_path({"command": patch}) is None
 
 
 @pytest.mark.parametrize("tool_name", ["PowerShell", "powershell", "pwsh", "functions.PowerShell"])

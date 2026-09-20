@@ -100,6 +100,33 @@ def test_collect_python_paths_uses_patch_headers_only(load_script_module, tmp_pa
     assert seen == {added.resolve(), moved.resolve()}
 
 
+def test_collect_python_paths_reads_a_patch_carried_in_a_command_field(
+    load_script_module, tmp_path
+) -> None:
+    """Codex sends apply_patch documents in ``command``, not ``patch``.
+
+    Without this the cleaner saw no file targets at all for a Codex edit and silently did
+    nothing.
+    """
+    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_cmd_patch")
+    edited = _write_py(tmp_path / "messy.py")
+    patch = "\n".join(
+        [
+            "*** Begin Patch",
+            "*** Update File: messy.py",
+            "@@",
+            "-x=1",
+            "+x=2",
+            "*** End Patch",
+        ]
+    )
+    seen = set()
+
+    cleaner._collect_python_paths({"command": patch}, seen, tmp_path)
+
+    assert seen == {edited.resolve()}
+
+
 def test_collect_python_paths_rejects_paths_outside_root(load_script_module, tmp_path) -> None:
     cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_outside")
     root = tmp_path / "repo"

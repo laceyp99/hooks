@@ -45,6 +45,10 @@ COMMAND_FIELD_NAMES = frozenset(
 # patch name real targets; the patch body is inert data.
 PATCH_FIELD_NAMES = frozenset({"patch"})
 
+# Codex sends its apply_patch document in the ``command`` field rather than ``patch``, so the
+# field name alone cannot identify a patch. Any string opening with this marker is one.
+PATCH_DOCUMENT_PREFIX = "*** Begin Patch"
+
 PATCH_TARGET_RE = re.compile(
     r"^\*{3} (?:Add|Delete|Update) File:\s*(.+?)\s*$|^\*{3} Move to:\s*(.+?)\s*$",
     re.MULTILINE,
@@ -91,6 +95,11 @@ def iter_string_tokens(value: str) -> Iterator[str]:
         yield normalized
 
 
+def is_patch_document(value: Any) -> bool:
+    """Return True when ``value`` is an apply_patch document, whatever field carries it."""
+    return isinstance(value, str) and value.lstrip().startswith(PATCH_DOCUMENT_PREFIX)
+
+
 def iter_patch_targets(patch: str) -> Iterator[str]:
     for match in PATCH_TARGET_RE.finditer(patch):
         target = match.group(1) or match.group(2)
@@ -110,12 +119,16 @@ def iter_field_strings(
     Only dictionary keys in ``field_names`` (case-insensitive) are inspected. Strings nested in
     lists or dictionaries beneath a selected key are yielded, while everything else is ignored so
     that inert data such as documentation, metadata, or patch bodies cannot masquerade as a
-    command or file target. Patch documents contribute only their file headers.
+    command or file target. Patch documents contribute only their file headers, and are
+    recognized by their opening marker under any key so Codex's ``command``-carried apply_patch
+    payload is narrowed the same way a ``patch`` field is.
     """
     if isinstance(value, dict):
         for key, item in value.items():
             normalized_key = str(key).lower()
-            if include_patch_targets and normalized_key in PATCH_FIELD_NAMES:
+            if include_patch_targets and (
+                normalized_key in PATCH_FIELD_NAMES or is_patch_document(item)
+            ):
                 if isinstance(item, str):
                     yield from iter_patch_targets(item)
                 continue
@@ -146,14 +159,8 @@ def iter_field_strings(
 
 def _iter_command_values(value: Any) -> Iterator[str]:
     if isinstance(value, str):
-        yield value
-        return
-
-    if isinstance(value, list):
-        parts = [item for item in value if isinstance(item, str)]
-        if len(parts) > 1:
-            yield " ".join(parts)
-        yield from parts
+        if not is_patch_document(value):
+            yield value
         return
 
     if isinstance(value, dict):
@@ -164,10 +171,13 @@ def _iter_command_values(value: Any) -> Iterator[str]:
 def iter_command_strings(value: Any) -> Iterator[str]:
     """Yield executable command strings found under command fields.
 
-    A list under a command field is an argv vector, as emitted by Codex's ``shell`` tool. Its
-    string elements are joined with single spaces and yielded first so patterns written for a
-    command line see the program and its arguments together; each element is then yielded on
-    its own so a script wrapped in ``["bash", "-lc", "..."]`` is still inspected verbatim.
+    Only strings count. Every host checked sends a command field as one string: Claude Code's
+    Bash and PowerShell tools, and Codex, which routes its shell tool through
+    ``powershell.exe -Command '<string>'`` and reports the tool as ``Bash``. Nothing joins a
+    list into a command line, because no host was found that emits an argv vector.
+
+    An apply_patch document is data rather than a command line, so it is skipped here and
+    inspected through its file headers instead.
     """
     if isinstance(value, str):
         yield value
