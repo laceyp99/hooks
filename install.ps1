@@ -417,8 +417,14 @@ function Copy-ManagedBundle {
     Write-Host "Refreshed managed $Name runtime files."
 }
 
-function Install-PiBridge {
+# Installs a single managed runtime file, such as a harness bridge written in TypeScript. Pi and
+# OpenCode both register their hooks by dropping one file into a directory the harness scans, so
+# neither needs the JSON merge the Claude Code and Codex configs go through.
+function Install-ManagedFile {
     param(
+        [Parameter(Mandatory = $true)]
+        [string] $Name,
+
         [Parameter(Mandatory = $true)]
         [string] $SourcePath,
 
@@ -426,22 +432,22 @@ function Install-PiBridge {
         [string] $DestinationPath
     )
 
-    if (-not (Ask-YesNo "Refresh managed Pi bridge extension?")) {
-        Write-Host "Skipped Pi bridge extension."
+    if (-not (Ask-YesNo "Refresh managed $Name?")) {
+        Write-Host "Skipped $Name."
         return
     }
 
     New-Item -ItemType Directory -Force (Split-Path -Parent $DestinationPath) | Out-Null
     if (-not (Test-Path -LiteralPath $DestinationPath)) {
         Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath
-        Write-Host "Installed Pi bridge extension at $DestinationPath"
+        Write-Host "Installed $Name at $DestinationPath"
         return
     }
 
     $sourceHash = (Get-FileHash -LiteralPath $SourcePath -Algorithm SHA256).Hash
     $destinationHash = (Get-FileHash -LiteralPath $DestinationPath -Algorithm SHA256).Hash
     if ($sourceHash -eq $destinationHash) {
-        Write-Host "Pi bridge at $DestinationPath is already up to date."
+        Write-Host "$Name at $DestinationPath is already up to date."
         return
     }
 
@@ -449,12 +455,13 @@ function Install-PiBridge {
     # lost, then replace it with the checked-in version.
     Backup-File -Path $DestinationPath
     Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath -Force
-    Write-Host "Refreshed Pi bridge extension at $DestinationPath"
+    Write-Host "Refreshed $Name at $DestinationPath"
 }
 
 $claudeHooksDir = Join-Path $env:USERPROFILE ".claude\hooks"
 $codexHooksDir = Join-Path $env:USERPROFILE ".codex\hooks"
 $piExtensionPath = Join-Path $env:USERPROFILE ".pi\agent\extensions\agent-hooks.ts"
+$openCodePluginPath = Join-Path $env:USERPROFILE ".config\opencode\plugins\agent-hooks.ts"
 
 # Claude Code reads hooks from its user settings file. Only the "hooks" key is managed here;
 # every other setting in an existing settings.json is preserved.
@@ -484,8 +491,17 @@ Copy-ManagedBundle `
     -SourceHooksDir (Join-Path $RepoRoot ".codex\hooks") `
     -DestinationHooksDir $codexHooksDir
 
-Install-PiBridge `
+Install-ManagedFile `
+    -Name "Pi bridge extension" `
     -SourcePath (Join-Path $RepoRoot ".pi\agent\extensions\agent-hooks.ts") `
     -DestinationPath $piExtensionPath
+
+# OpenCode auto-loads every file in its plugin directory, so dropping the bridge there is the
+# whole registration step; there is no config file to merge. Like the Pi bridge, the plugin only
+# shells out to the Python in this checkout, so the checkout has to stay where it is.
+Install-ManagedFile `
+    -Name "OpenCode plugin" `
+    -SourcePath (Join-Path $RepoRoot ".opencode\plugins\agent-hooks.ts") `
+    -DestinationPath $openCodePluginPath
 
 Write-Host "Install complete."
