@@ -138,7 +138,7 @@ A repo opts in via any of:
 | PostToolUse | `Edit`, `MultiEdit`, `Write`, `NotebookEdit` |
 | Stop | every stop |
 
-Those are Claude Code's tool names. Every harness is matched against the same sets, case-insensitively, so OpenCode's lowercase `bash`, `edit`, `write`, and `read` land on the same rules; `glob` and `grep` touch no files and are not checked. Argument field names are matched the same way, which is why OpenCode's camelCase `filePath` is recognized alongside Claude Code's `file_path`.
+Those are Claude Code's tool names. Every harness is matched against the same sets, case-insensitively, so OpenCode's lowercase `bash`, `edit`, `write`, `read`, and `apply_patch` land on the same rules; `glob` and `grep` touch no files and are not checked. Argument field names are matched the same way, which is why OpenCode's camelCase `filePath` is recognized alongside Claude Code's `file_path`. `apply_patch` sends its patch in `patchText`; the patch is recognized by its opening `*** Begin Patch` marker rather than by the field name, so only its file headers are inspected, as with Codex.
 
 ### Interpreter selection
 
@@ -179,8 +179,8 @@ Two things to know:
 | Claude Code registration | the `hooks` key of `%USERPROFILE%\.claude\settings.json` |
 | Codex registration | `%USERPROFILE%\.codex\hooks.json` |
 | Pi bridge | `%USERPROFILE%\.pi\agent\extensions\agent-hooks.ts` |
-| OpenCode plugin | `%USERPROFILE%\.config\opencode\plugins\agent-hooks.ts` |
-| Checked-in templates | `.claude/settings.example.json`, `.codex/hooks.example.json` |
+| OpenCode plugin | `%USERPROFILE%\.config\opencode\plugins\agent-hooks.ts`, or under `%XDG_CONFIG_HOME%\opencode\plugins\` when that is set |
+| Checked-in templates | `.claude/settings.example.json`, `.codex/hooks.example.json`, `.opencode/agent-hooks.example.ts` |
 | Shared logic, installed copy | `%USERPROFILE%\src\agent_hooks\` |
 
 - Keep `cwd` set to `"."` so repo-aware hooks operate on the active project rather than the hooks bundle.
@@ -204,7 +204,11 @@ The OpenCode plugin is a single auto-loaded file, so installing it is the whole 
 |---|---|---|
 | `tool.execute.before` | `pre_tool_security.py`, `pre_tool_dangerous_commands.py` | Denies by throwing; the reason reaches the model as the failed tool call |
 | `tool.execute.after` | `post_tool_cleaner.py` | Appends any Ruff summary to the tool's output |
-| `event` (`session.idle`) | `session_stop.py` | Reports only; see [Known limits](#known-limits) |
+| `event` (`session.idle`) | `session_stop.py` | Reports only, one sweep at a time; see [Known limits](#known-limits) |
+
+The plugin skips the guards for OpenCode built-ins that neither name a file nor run a command, such as `glob`, `grep`, `todowrite`, and `webfetch`, and runs the cleaner only for tools that write. Each hook costs a couple of Python startups, so this keeps read-only tool calls fast. Any tool it does not recognize, including MCP tools, still goes through the guards.
+
+The checked-in plugin is `.opencode/agent-hooks.example.ts`, deliberately outside `.opencode/plugins/`. OpenCode scans that directory in whatever project it runs in, so a copy there would load a second time whenever OpenCode runs inside this repo.
 
 ## Manual installation
 
@@ -257,11 +261,12 @@ Back up any existing bridge first if you have local edits.
 <summary>OpenCode</summary>
 
 ```powershell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\.config\opencode\plugins" | Out-Null
-Copy-Item -Force ".opencode\plugins\agent-hooks.ts" "$env:USERPROFILE\.config\opencode\plugins\agent-hooks.ts"
+$configRoot = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { "$env:USERPROFILE\.config" }
+New-Item -ItemType Directory -Force "$configRoot\opencode\plugins" | Out-Null
+Copy-Item -Force ".opencode\agent-hooks.example.ts" "$configRoot\opencode\plugins\agent-hooks.ts"
 ```
 
-That is the whole registration: OpenCode loads every file in the plugin directory at startup, so there is no config entry to add. Drop it in `.opencode/plugins/` inside a project instead if you want the guards in that project only. Back up any existing plugin first if you have local edits.
+That is the whole registration: OpenCode loads every file in the plugin directory at startup, so there is no config entry to add. Copy it to `.opencode/plugins/agent-hooks.ts` inside a project instead if you want the guards in that project only. Back up any existing plugin first if you have local edits.
 </details>
 
 ## Troubleshooting
@@ -321,7 +326,7 @@ Remove-Item -Recurse -Force "$env:USERPROFILE\.claude\hooks"
 Remove-Item -Recurse -Force "$env:USERPROFILE\.codex\hooks"
 Remove-Item -Recurse -Force "$env:USERPROFILE\src\agent_hooks"
 Remove-Item -Force "$env:USERPROFILE\.pi\agent\extensions\agent-hooks.ts"
-Remove-Item -Force "$env:USERPROFILE\.config\opencode\plugins\agent-hooks.ts"
+Remove-Item -Force "$(if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { "$env:USERPROFILE\.config" })\opencode\plugins\agent-hooks.ts"
 ```
 
 Your timestamped `.bak-*` files are left in place; delete them once you are satisfied.

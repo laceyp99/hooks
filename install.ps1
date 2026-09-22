@@ -461,7 +461,16 @@ function Install-ManagedFile {
 $claudeHooksDir = Join-Path $env:USERPROFILE ".claude\hooks"
 $codexHooksDir = Join-Path $env:USERPROFILE ".codex\hooks"
 $piExtensionPath = Join-Path $env:USERPROFILE ".pi\agent\extensions\agent-hooks.ts"
-$openCodePluginPath = Join-Path $env:USERPROFILE ".config\opencode\plugins\agent-hooks.ts"
+# OpenCode finds its global config directory through the xdg-basedir package: XDG_CONFIG_HOME
+# when it is set and non-empty, otherwise ~/.config, on every platform including Windows. Resolve
+# it the same way, or a user with XDG_CONFIG_HOME set gets the plugin written somewhere OpenCode
+# never looks, and the hooks silently never run.
+$openCodeConfigRoot = if ([string]::IsNullOrEmpty($env:XDG_CONFIG_HOME)) {
+    Join-Path $env:USERPROFILE ".config"
+} else {
+    $env:XDG_CONFIG_HOME
+}
+$openCodePluginPath = Join-Path $openCodeConfigRoot "opencode\plugins\agent-hooks.ts"
 
 # Claude Code reads hooks from its user settings file. Only the "hooks" key is managed here;
 # every other setting in an existing settings.json is preserved.
@@ -499,9 +508,13 @@ Install-ManagedFile `
 # OpenCode auto-loads every file in its plugin directory, so dropping the bridge there is the
 # whole registration step; there is no config file to merge. Like the Pi bridge, the plugin only
 # shells out to the Python in this checkout, so the checkout has to stay where it is.
+#
+# The checked-in copy lives outside .opencode/plugins/ on purpose. OpenCode also scans that
+# directory in whatever project it runs in, this one included, and it dedupes by file path, so a
+# copy there would load a second time alongside the installed one whenever OpenCode runs here.
 Install-ManagedFile `
     -Name "OpenCode plugin" `
-    -SourcePath (Join-Path $RepoRoot ".opencode\plugins\agent-hooks.ts") `
+    -SourcePath (Join-Path $RepoRoot ".opencode\agent-hooks.example.ts") `
     -DestinationPath $openCodePluginPath
 
 Write-Host "Install complete."
