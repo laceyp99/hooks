@@ -18,8 +18,10 @@ type HookResponse = {
 	hookSpecificOutput?: HookSpecificOutput;
 };
 
+// The events bin/run_hook.py dispatches on, one Python process per event.
+type HookEvent = "pre-tool" | "post-tool" | "stop";
+
 const DEFAULT_HOOKS_ROOT = join(homedir(), "code", "agent-hooks");
-const BUNDLE_DIRS = [".codex", ".claude"] as const;
 const pendingToolInputs = new Map<string, Record<string, unknown>>();
 
 function resolveHooksRoot(): string | undefined {
@@ -27,20 +29,16 @@ function resolveHooksRoot(): string | undefined {
 	return existsSync(candidate) ? candidate : undefined;
 }
 
-function resolveBundlePath(relativePath: string): string | undefined {
+// The runner lives at bin/run_hook.py in the checkout. It runs every event in the interpreter
+// this bridge launches, never in a project virtualenv, and finds src/agent_hooks next to itself.
+function resolveRunnerPath(): string | undefined {
 	const root = resolveHooksRoot();
 	if (!root) {
 		return undefined;
 	}
 
-	for (const bundleDir of BUNDLE_DIRS) {
-		const candidate = join(root, bundleDir, "hooks", relativePath);
-		if (existsSync(candidate)) {
-			return candidate;
-		}
-	}
-
-	return undefined;
+	const candidate = join(root, "bin", "run_hook.py");
+	return existsSync(candidate) ? candidate : undefined;
 }
 
 function resolvePythonCommand(): [string, string[]] {
@@ -73,27 +71,26 @@ function parseHookResponse(stdout: string): HookResponse | undefined {
 }
 
 async function runHook(
-	scriptName: string,
+	event: HookEvent,
 	payload: Record<string, unknown>,
 	signal: AbortSignal | undefined,
 ): Promise<HookResponse | undefined> {
-	const runHookPath = resolveBundlePath("run_hook.py");
-	const scriptPath = resolveBundlePath(join("scripts", scriptName));
-	if (!runHookPath || !scriptPath) {
+	const runHookPath = resolveRunnerPath();
+	if (!runHookPath) {
 		return undefined;
 	}
 
 	const [command, extraArgs] = resolvePythonCommand();
 	let child: ChildProcessWithoutNullStreams;
 	try {
-		child = spawn(command, [...extraArgs, runHookPath, scriptPath], {
+		child = spawn(command, [...extraArgs, runHookPath, event], {
 			cwd: process.cwd(),
 			env: { ...process.env },
 			stdio: ["pipe", "pipe", "pipe"],
 			signal,
 		});
 	} catch (error) {
-		console.warn(`[agent-hooks] ${scriptName} could not start: ${String(error)}`);
+		console.warn(`[agent-hooks] ${event} could not start: ${String(error)}`);
 		return undefined;
 	}
 
@@ -124,7 +121,7 @@ async function runHook(
 	if (exitCode !== 0) {
 		const message = stderr.trim();
 		if (message) {
-			console.warn(`[agent-hooks] ${scriptName} failed: ${message}`);
+			console.warn(`[agent-hooks] ${event} failed: ${message}`);
 		}
 		return undefined;
 	}
@@ -153,15 +150,12 @@ export default function (pi: ExtensionAPI) {
 			tool_input: event.input,
 		};
 
-		const [securityResponse, dangerousResponse] = await Promise.all([
-			runHook("pre_tool_security.py", payload, ctx.signal),
-			runHook("pre_tool_dangerous_commands.py", payload, ctx.signal),
-		]);
-
-		const blockedResponse = [securityResponse, dangerousResponse].find(isDenied);
-		if (blockedResponse) {
+		// One process runs both the secret-file/Git-internals rules and the dangerous-command
+		// rules, and reports at most one decision.
+		const response = await runHook("pre-tool", payload, ctx.signal);
+		if (isDenied(response)) {
 			pendingToolInputs.delete(event.toolCallId);
-			const reason = getReason(blockedResponse) ?? "Blocked by agent hooks.";
+			const reason = getReason(response) ?? "Blocked by agent hooks.";
 			if (ctx.hasUI) {
 				ctx.ui.notify(reason, "warning");
 			}
@@ -181,7 +175,7 @@ export default function (pi: ExtensionAPI) {
 			tool_input: toolInput ?? {},
 		};
 
-		const response = await runHook("post_tool_cleaner.py", payload, ctx.signal);
+		const response = await runHook("post-tool", payload, ctx.signal);
 		const additionalContext = response?.hookSpecificOutput?.additionalContext?.trim();
 		if (additionalContext) {
 			pi.sendMessage(
@@ -196,7 +190,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
-		const response = await runHook("session_stop.py", {}, ctx.signal);
+		const response = await runHook("stop", {}, ctx.signal);
 		if (!response || !isBlockResponse(response)) {
 			return;
 		}

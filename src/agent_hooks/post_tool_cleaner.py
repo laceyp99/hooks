@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-import json
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
 from agent_hooks.common import (
     FILE_TARGET_FIELD_NAMES,
+    emit_response,
     iter_field_strings,
     iter_string_tokens,
     load_stdin_payload,
     normalize_tool_name,
 )
-from agent_hooks.ruff_support import repo_uses_ruff
+from agent_hooks.ruff_support import repo_uses_ruff, ruff_command
 
 WRITE_TOOL_NAMES = {
     "applypatch",
@@ -97,76 +96,78 @@ def _collect_python_paths(value: Any, seen: set[Path], root: Path) -> None:
                 seen.add(resolved)
 
 
-def _run_ruff(command_name: str, paths: list[Path], *args: str) -> tuple[int, str, str]:
-    command = [
-        sys.executable,
-        "-m",
-        "ruff",
-        command_name,
-        *args,
-        *[str(path) for path in paths],
-    ]
+def _run_ruff(
+    ruff: list[str], command_name: str, paths: list[Path], *args: str
+) -> tuple[int, str, str]:
+    command = [*ruff, command_name, *args, *[str(path) for path in paths]]
     completed = subprocess.run(command, check=False, capture_output=True, text=True)
     return completed.returncode, completed.stdout, completed.stderr
 
 
-def _emit_additional_context(paths: list[Path], details: list[str]) -> None:
+def _additional_context_response(paths: list[Path], details: list[str]) -> dict[str, Any] | None:
     output = "\n\n".join(detail for detail in details if detail.strip())
     if not output:
-        return
+        return None
 
     path_list = ", ".join(str(path) for path in paths)
-    payload = {
+    return {
         "systemMessage": f"Ruff found issues while cleaning edited Python files: {path_list}",
         "hookSpecificOutput": {
             "hookEventName": "PostToolUse",
             "additionalContext": f"Ruff cleaner results for edited Python files ({path_list}):\n{output}",
         },
     }
-    json.dump(payload, sys.stdout)
-    sys.stdout.write("\n")
 
 
-def main() -> int:
-    payload = load_stdin_payload()
+def evaluate(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Clean the Python files the tool call edited and return any remaining Ruff findings.
+
+    The project is the current directory, which every harness sets. Ruff runs as a subprocess
+    chosen by ``ruff_command``; nothing else here touches the project's environment.
+    """
     tool_name = str(payload.get("tool_name") or payload.get("toolName") or "")
     if not _should_lint(tool_name):
-        return 0
+        return None
 
     root = Path.cwd()
     if not repo_uses_ruff(root):
-        return 0
+        return None
 
     tool_input = payload.get("tool_input") or payload.get("toolArgs") or {}
     paths: set[Path] = set()
     _collect_python_paths(tool_input, paths, root)
 
     if not paths:
-        return 0
+        return None
 
     python_paths = sorted(paths)
+    ruff = ruff_command(root)
     details: list[str] = []
 
-    fix_code, fix_stdout, fix_stderr = _run_ruff("check", python_paths, "--fix")
+    fix_code, fix_stdout, fix_stderr = _run_ruff(ruff, "check", python_paths, "--fix")
     if fix_code != 0:
         fix_output = (fix_stdout or fix_stderr).strip()
         if fix_output:
             details.append(f"ruff check --fix:\n{fix_output}")
 
-    format_code, format_stdout, format_stderr = _run_ruff("format", python_paths)
+    format_code, format_stdout, format_stderr = _run_ruff(ruff, "format", python_paths)
     if format_code != 0:
         format_output = (format_stdout or format_stderr).strip()
         if format_output:
             details.append(f"ruff format:\n{format_output}")
 
-    check_code, check_stdout, check_stderr = _run_ruff("check", python_paths)
+    check_code, check_stdout, check_stderr = _run_ruff(ruff, "check", python_paths)
     if check_code != 0:
         check_output = (check_stdout or check_stderr).strip()
         if check_output:
             details.append(f"ruff check:\n{check_output}")
 
-    if details:
-        _emit_additional_context(python_paths, details)
+    return _additional_context_response(python_paths, details)
+
+
+def main() -> int:
+    """Run the cleaner alone as a hook. The installed entry point is ``agent_hooks.dispatch``."""
+    emit_response(evaluate(load_stdin_payload()))
     return 0
 
 

@@ -457,8 +457,8 @@ def _find_protected_git_mutation_command(value: Any) -> str | None:
     return None
 
 
-def _emit_block(path: str) -> None:
-    payload = {
+def _block_response(path: str) -> dict[str, Any]:
+    return {
         "systemMessage": "Human must handle env-like secret files manually.",
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -466,12 +466,10 @@ def _emit_block(path: str) -> None:
             "permissionDecisionReason": f"Human must handle env-like secret files manually; do not read or modify them. Blocked target: {path}",
         },
     }
-    json.dump(payload, sys.stdout)
-    sys.stdout.write("\n")
 
 
-def _emit_git_block(path: str) -> None:
-    payload = {
+def _git_block_response(path: str) -> dict[str, Any]:
+    return {
         "systemMessage": "Human must handle protected Git internals manually.",
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -479,31 +477,27 @@ def _emit_git_block(path: str) -> None:
             "permissionDecisionReason": f"Human must handle protected Git internals manually; do not write or move them. Blocked target: {path}",
         },
     }
-    json.dump(payload, sys.stdout)
-    sys.stdout.write("\n")
 
 
-def main() -> int:
-    payload = load_stdin_payload()
+def evaluate(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the PreToolUse deny response for ``payload``, or None to allow the call."""
     tool_name = str(payload.get("tool_name") or payload.get("toolName") or "")
     if not _should_check(tool_name):
-        return 0
+        return None
 
     tool_input = payload.get("tool_input") or payload.get("toolArgs") or {}
     blocked_git_path = (
         _find_protected_git_path(tool_input) if _should_check_git_paths(tool_name) else None
     )
     if blocked_git_path:
-        _emit_git_block(blocked_git_path)
-        return 0
+        return _git_block_response(blocked_git_path)
 
     name, short_name = normalize_tool_name(tool_name)
     is_shell = name in SHELL_COMMAND_TOOLS or short_name in SHELL_COMMAND_TOOLS
     if is_shell:
         blocked_git_command = _find_protected_git_mutation_command(tool_input)
         if blocked_git_command:
-            _emit_git_block(blocked_git_command)
-            return 0
+            return _git_block_response(blocked_git_command)
 
     # A tool that names its target in a dedicated field is denied on the name alone. A shell
     # command is denied only when it actually reads or writes the file, because everything else
@@ -512,8 +506,17 @@ def main() -> int:
         _find_env_path_in_shell_payload(tool_input) if is_shell else _find_env_path(tool_input)
     )
     if blocked_path:
-        _emit_block(blocked_path)
+        return _block_response(blocked_path)
 
+    return None
+
+
+def main() -> int:
+    """Run these rules alone as a hook. The installed entry point is ``agent_hooks.dispatch``."""
+    response = evaluate(load_stdin_payload())
+    if response is not None:
+        json.dump(response, sys.stdout)
+        sys.stdout.write("\n")
     return 0
 
 

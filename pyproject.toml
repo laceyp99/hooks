@@ -23,7 +23,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 addopts = "-q --import-mode=importlib"
-testpaths = [".claude/hooks/tests", ".codex/hooks/tests"]
+testpaths = ["tests"]
 
 [tool.ruff]
 target-version = "py310"

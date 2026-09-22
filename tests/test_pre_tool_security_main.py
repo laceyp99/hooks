@@ -1,5 +1,6 @@
 import io
 import json
+import sys
 
 
 def _dot(name: str) -> str:
@@ -12,8 +13,8 @@ def _join_suffix(name: str, suffix: str) -> str:
 
 def _run_main(module, monkeypatch, payload_text: str):
     stdout = io.StringIO()
-    monkeypatch.setattr(module.sys, "stdin", io.StringIO(payload_text))
-    monkeypatch.setattr(module.sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(payload_text))
+    monkeypatch.setattr(sys, "stdout", stdout)
     exit_code = module.main()
     return exit_code, stdout.getvalue()
 
@@ -35,9 +36,9 @@ class _BinaryStdin:
 def _run_main_with_stdin(module, monkeypatch, stdin) -> tuple[int, str, str]:
     stdout = io.StringIO()
     stderr = io.StringIO()
-    monkeypatch.setattr(module.sys, "stdin", stdin)
-    monkeypatch.setattr(module.sys, "stdout", stdout)
-    monkeypatch.setattr(module.sys, "stderr", stderr)
+    monkeypatch.setattr(sys, "stdin", stdin)
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", stderr)
     exit_code = module.main()
     return exit_code, stdout.getvalue(), stderr.getvalue()
 

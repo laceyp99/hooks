@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -8,8 +9,8 @@ import pytest
 
 def _set_stdio(module, monkeypatch, payload: dict):
     stdout = io.StringIO()
-    monkeypatch.setattr(module.sys, "stdin", io.StringIO(json.dumps(payload)))
-    monkeypatch.setattr(module.sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    monkeypatch.setattr(sys, "stdout", stdout)
     return stdout
 
 
@@ -30,16 +31,11 @@ def _write_py(path):
         ("shell", False),
     ],
 )
-def test_should_lint(load_script_module, tool_name: str, expected: bool) -> None:
-    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_should_lint")
-
+def test_should_lint(cleaner, tool_name: str, expected: bool) -> None:
     assert cleaner._should_lint(tool_name) is expected
 
 
-def test_collect_python_paths_reads_target_fields_and_deduplicates(
-    load_script_module, tmp_path
-) -> None:
-    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_collect")
+def test_collect_python_paths_reads_target_fields_and_deduplicates(cleaner, tmp_path) -> None:
     first = _write_py(tmp_path / "first.py")
     second = _write_py(tmp_path / "pkg" / "second.py")
     (tmp_path / "notes.txt").write_text("", encoding="utf-8")
@@ -58,8 +54,7 @@ def test_collect_python_paths_reads_target_fields_and_deduplicates(
     assert seen == {first.resolve(), second.resolve()}
 
 
-def test_collect_python_paths_ignores_non_target_fields(load_script_module, tmp_path) -> None:
-    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_ignore")
+def test_collect_python_paths_ignores_non_target_fields(cleaner, tmp_path) -> None:
     mentioned = _write_py(tmp_path / "mentioned.py")
     seen = set()
 
@@ -78,8 +73,7 @@ def test_collect_python_paths_ignores_non_target_fields(load_script_module, tmp_
     assert seen == set()
 
 
-def test_collect_python_paths_uses_patch_headers_only(load_script_module, tmp_path) -> None:
-    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_patch")
+def test_collect_python_paths_uses_patch_headers_only(cleaner, tmp_path) -> None:
     added = _write_py(tmp_path / "added.py")
     moved = _write_py(tmp_path / "moved.py")
     _write_py(tmp_path / "body_only.py")
@@ -100,15 +94,12 @@ def test_collect_python_paths_uses_patch_headers_only(load_script_module, tmp_pa
     assert seen == {added.resolve(), moved.resolve()}
 
 
-def test_collect_python_paths_reads_a_patch_carried_in_a_command_field(
-    load_script_module, tmp_path
-) -> None:
+def test_collect_python_paths_reads_a_patch_carried_in_a_command_field(cleaner, tmp_path) -> None:
     """Codex sends apply_patch documents in ``command``, not ``patch``.
 
     Without this the cleaner saw no file targets at all for a Codex edit and silently did
     nothing.
     """
-    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_cmd_patch")
     edited = _write_py(tmp_path / "messy.py")
     patch = "\n".join(
         [
@@ -127,8 +118,7 @@ def test_collect_python_paths_reads_a_patch_carried_in_a_command_field(
     assert seen == {edited.resolve()}
 
 
-def test_collect_python_paths_rejects_paths_outside_root(load_script_module, tmp_path) -> None:
-    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_outside")
+def test_collect_python_paths_rejects_paths_outside_root(cleaner, tmp_path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     inside = _write_py(root / "inside.py")
@@ -152,8 +142,7 @@ def test_collect_python_paths_rejects_paths_outside_root(load_script_module, tmp
     assert seen == {inside.resolve()}
 
 
-def test_collect_python_paths_rejects_symlink_escape(load_script_module, tmp_path) -> None:
-    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_symlink")
+def test_collect_python_paths_rejects_symlink_escape(cleaner, tmp_path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     outside = _write_py(tmp_path / "outside.py")
@@ -169,8 +158,7 @@ def test_collect_python_paths_rejects_symlink_escape(load_script_module, tmp_pat
     assert seen == set()
 
 
-def test_run_ruff_builds_expected_command(load_script_module, monkeypatch, tmp_path) -> None:
-    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_run_ruff")
+def test_run_ruff_builds_expected_command(cleaner, monkeypatch, tmp_path) -> None:
     path = _write_py(tmp_path / "module.py")
     recorded = {}
 
@@ -183,15 +171,13 @@ def test_run_ruff_builds_expected_command(load_script_module, monkeypatch, tmp_p
 
     monkeypatch.setattr(cleaner.subprocess, "run", _fake_run)
 
-    exit_code, stdout, stderr = cleaner._run_ruff("check", [path], "--fix")
+    exit_code, stdout, stderr = cleaner._run_ruff(["ruff-exe"], "check", [path], "--fix")
 
     assert exit_code == 0
     assert stdout == ""
     assert stderr == ""
     assert recorded["command"] == [
-        cleaner.sys.executable,
-        "-m",
-        "ruff",
+        "ruff-exe",
         "check",
         "--fix",
         str(path),
@@ -201,8 +187,7 @@ def test_run_ruff_builds_expected_command(load_script_module, monkeypatch, tmp_p
     assert recorded["text"] is True
 
 
-def test_main_skips_when_repo_does_not_use_ruff(load_script_module, monkeypatch) -> None:
-    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_skip")
+def test_main_skips_when_repo_does_not_use_ruff(cleaner, monkeypatch) -> None:
     monkeypatch.setattr(cleaner, "repo_uses_ruff", lambda root: False)
     stdout = _set_stdio(
         cleaner,
@@ -214,8 +199,7 @@ def test_main_skips_when_repo_does_not_use_ruff(load_script_module, monkeypatch)
     assert stdout.getvalue() == ""
 
 
-def test_main_skips_when_no_python_paths_are_present(load_script_module, monkeypatch) -> None:
-    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_no_paths")
+def test_main_skips_when_no_python_paths_are_present(cleaner, monkeypatch) -> None:
     monkeypatch.setattr(cleaner, "repo_uses_ruff", lambda root: True)
     stdout = _set_stdio(
         cleaner,
@@ -227,8 +211,7 @@ def test_main_skips_when_no_python_paths_are_present(load_script_module, monkeyp
     assert stdout.getvalue() == ""
 
 
-def test_main_skips_external_python_paths(load_script_module, monkeypatch, tmp_path) -> None:
-    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_external")
+def test_main_skips_external_python_paths(cleaner, monkeypatch, tmp_path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     monkeypatch.chdir(root)
@@ -245,8 +228,7 @@ def test_main_skips_external_python_paths(load_script_module, monkeypatch, tmp_p
     assert stdout.getvalue() == ""
 
 
-def test_main_runs_ruff_commands_in_order(load_script_module, monkeypatch, tmp_path) -> None:
-    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_main_order")
+def test_main_runs_ruff_commands_in_order(cleaner, monkeypatch, tmp_path) -> None:
     monkeypatch.chdir(tmp_path)
     path = _write_py(tmp_path / "module.py")
     stdout = _set_stdio(
@@ -255,9 +237,11 @@ def test_main_runs_ruff_commands_in_order(load_script_module, monkeypatch, tmp_p
         {"tool_name": "apply_patch", "tool_input": {"path": str(path)}},
     )
     monkeypatch.setattr(cleaner, "repo_uses_ruff", lambda root: True)
+    monkeypatch.setattr(cleaner, "ruff_command", lambda root: ["ruff-exe"])
     calls = []
 
-    def _fake_run_ruff(command_name, paths, *args):
+    def _fake_run_ruff(ruff, command_name, paths, *args):
+        assert ruff == ["ruff-exe"]
         calls.append((command_name, [item.name for item in paths], args))
         return 0, "", ""
 
@@ -273,9 +257,8 @@ def test_main_runs_ruff_commands_in_order(load_script_module, monkeypatch, tmp_p
 
 
 def test_main_emits_additional_context_for_remaining_ruff_issues(
-    load_script_module, monkeypatch, tmp_path
+    cleaner, monkeypatch, tmp_path
 ) -> None:
-    cleaner = load_script_module("scripts/post_tool_cleaner.py", "post_tool_cleaner_main_emit")
     monkeypatch.chdir(tmp_path)
     path = _write_py(tmp_path / "module.py")
     stdout = _set_stdio(

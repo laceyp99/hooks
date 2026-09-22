@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import importlib.util
 import re
+import shutil
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -22,6 +25,13 @@ RUFF_METADATA_FILES = (
     "pyproject.toml",
     "requirements.txt",
     "requirements-dev.txt",
+)
+
+# Project virtual environments, in the order they are preferred when looking for Ruff.
+VENV_DIR_NAMES = (
+    ".venv",
+    "venv",
+    "env",
 )
 
 # Fallback substring markers used only when pyproject.toml cannot be parsed as TOML.
@@ -148,3 +158,53 @@ def pyproject_declares_ruff(content: str) -> bool:
 def _mentions_ruff_marker(content: str) -> bool:
     lowered = content.lower()
     return any(marker in lowered for marker in RUFF_MARKERS)
+
+
+def _venv_bin_dir(venv_dir: Path) -> Path:
+    return venv_dir / ("Scripts" if sys.platform == "win32" else "bin")
+
+
+def _venv_python_path(venv_dir: Path) -> Path:
+    return _venv_bin_dir(venv_dir) / ("python.exe" if sys.platform == "win32" else "python")
+
+
+def _venv_ruff_path(venv_dir: Path) -> Path:
+    return _venv_bin_dir(venv_dir) / ("ruff.exe" if sys.platform == "win32" else "ruff")
+
+
+def _venv_has_ruff_package(venv_dir: Path) -> bool:
+    patterns = ("Lib/site-packages/ruff", "lib/python*/site-packages/ruff")
+    return any(match.is_dir() for pattern in patterns for match in venv_dir.glob(pattern))
+
+
+def ruff_command(root: Path) -> list[str]:
+    """Return the command prefix that runs the Ruff the project at ``root`` expects.
+
+    Ruff is always launched as a subprocess. The hook logic itself runs in the interpreter the
+    harness started, never in the project's, so a repository cannot use its own environment
+    (``sitecustomize``, ``.pth`` files) to run code inside the guards. Only the Ruff binary is
+    taken from the project, because the project pins the version its config is written for.
+
+    Order: the first project virtual environment's ``ruff`` executable, then ``python -m ruff``
+    through that environment when Ruff is installed there without a script, then Ruff in the
+    current interpreter, then ``ruff`` on ``PATH``. With none of these, ``python -m ruff`` in
+    the current interpreter still runs so the missing-module error reaches the hook output.
+    """
+    for dirname in VENV_DIR_NAMES:
+        venv_dir = root / dirname
+        venv_ruff = _venv_ruff_path(venv_dir)
+        if venv_ruff.is_file():
+            return [str(venv_ruff)]
+
+        venv_python = _venv_python_path(venv_dir)
+        if venv_python.is_file() and _venv_has_ruff_package(venv_dir):
+            return [str(venv_python), "-m", "ruff"]
+
+    if importlib.util.find_spec("ruff") is not None:
+        return [sys.executable, "-m", "ruff"]
+
+    path_ruff = shutil.which("ruff")
+    if path_ruff:
+        return [path_ruff]
+
+    return [sys.executable, "-m", "ruff"]

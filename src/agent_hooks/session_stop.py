@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
-from agent_hooks.common import load_stdin_payload
-from agent_hooks.ruff_support import repo_uses_ruff
+from agent_hooks.common import emit_response, load_stdin_payload
+from agent_hooks.ruff_support import repo_uses_ruff, ruff_command
 
 # Automatic fixes at session stop are on by default. Set this to 0/false/no/off for check-only.
 STOP_FIX_ENV_VAR = "AGENT_HOOKS_STOP_FIX"
@@ -21,10 +19,10 @@ def _run(command: list[str]) -> tuple[int, str, str]:
     return completed.returncode, completed.stdout, completed.stderr
 
 
-def _emit_block(reason: str) -> None:
+def _block_response(reason: str) -> dict[str, Any]:
     # Claude Code reads ``decision``/``reason`` at the top level; Codex and the Pi bridge read
     # them from ``hookSpecificOutput``. Emit both so one payload serves every harness.
-    payload = {
+    return {
         "systemMessage": SUMMARY,
         "decision": "block",
         "reason": reason,
@@ -34,15 +32,11 @@ def _emit_block(reason: str) -> None:
             "reason": reason,
         },
     }
-    json.dump(payload, sys.stdout)
-    sys.stdout.write("\n")
 
 
-def _emit_notice(reason: str) -> None:
+def _notice_response(reason: str) -> dict[str, Any]:
     # Informational only: no ``decision`` key, so no harness treats this as a block.
-    payload = {"systemMessage": reason}
-    json.dump(payload, sys.stdout)
-    sys.stdout.write("\n")
+    return {"systemMessage": reason}
 
 
 def _stop_hook_active(payload: dict[str, Any]) -> bool:
@@ -114,22 +108,27 @@ def _changed_python_files(root: Path) -> list[str]:
     return sorted(changed)
 
 
-def main() -> int:
-    payload = load_stdin_payload()
+def evaluate(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Fix and check the project with Ruff, returning the stop block or notice, if any.
+
+    The project is the current directory, which every harness sets. Ruff runs as a subprocess
+    chosen by ``ruff_command``; nothing else here touches the project's environment.
+    """
     root = Path.cwd()
     if not repo_uses_ruff(root):
-        return 0
+        return None
 
+    ruff = ruff_command(root)
     fixes_enabled = _fixes_enabled()
     if fixes_enabled:
         changed = _changed_python_files(root)
         if changed:
-            _run([sys.executable, "-m", "ruff", "check", "--fix", *changed])
-            _run([sys.executable, "-m", "ruff", "format", *changed])
+            _run([*ruff, "check", "--fix", *changed])
+            _run([*ruff, "format", *changed])
 
     checks = [
-        [sys.executable, "-m", "ruff", "check", "."],
-        [sys.executable, "-m", "ruff", "format", "--check", "."],
+        [*ruff, "check", "."],
+        [*ruff, "format", "--check", "."],
     ]
 
     failures: list[tuple[list[str], str]] = []
@@ -139,7 +138,7 @@ def main() -> int:
             failures.append((command, (stdout or stderr).strip()))
 
     if not failures:
-        return 0
+        return None
 
     lines = [SUMMARY]
     for command, result_text in failures:
@@ -158,10 +157,14 @@ def main() -> int:
             "The previous stop was already blocked by this hook, so this stop is not blocked "
             "again. Remaining findings are reported for review."
         )
-        _emit_notice("\n".join(lines))
-        return 0
+        return _notice_response("\n".join(lines))
 
-    _emit_block("\n".join(lines))
+    return _block_response("\n".join(lines))
+
+
+def main() -> int:
+    """Run the stop sweep alone as a hook. The installed entry point is ``agent_hooks.dispatch``."""
+    emit_response(evaluate(load_stdin_payload()))
     return 0
 
 
