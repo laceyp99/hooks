@@ -4,11 +4,28 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 
-$ManagedScripts = @(
+# Managed hook entries, keyed by the event argument they pass to run_hook.py. Each lists the
+# per-script entries an install from before the single runner registered for the same job, so
+# those are recognized, rewritten to the current command, and deduplicated.
+$ManagedHooks = [ordered]@{
+    "pre-tool"  = @("pre_tool_security.py", "pre_tool_dangerous_commands.py")
+    "post-tool" = @("post_tool_cleaner.py")
+    "stop"      = @("session_stop.py")
+}
+
+# Files older installs placed in each harness's hooks\scripts directory. The runner no longer
+# uses them; they are removed so a stale copy of the rules cannot be run by mistake.
+$LegacyBundleScripts = @(
     "pre_tool_security.py",
     "pre_tool_dangerous_commands.py",
     "post_tool_cleaner.py",
-    "session_stop.py"
+    "session_stop.py",
+    "ruff_support.py"
+)
+
+# Modules older installs placed in %USERPROFILE%\src\agent_hooks that no longer exist.
+$LegacyPackageModules = @(
+    "bootstrap.py"
 )
 
 function Ask-YesNo {
@@ -64,21 +81,48 @@ function Backup-File {
     Write-Host "Backed up $Path to $backupPath"
 }
 
-function Test-HookContainsScript {
+# Returns the managed hook id ("pre-tool", "post-tool", "stop") a hook entry runs, or $null for a
+# hook this installer does not manage. Only commands that launch run_hook.py count. The current
+# form passes the id as the runner's argument; the legacy form passed a script path, which maps
+# to the id that replaced it.
+function Get-ManagedHookId {
     param(
         [AllowNull()]
-        [object] $Hook,
-
-        [Parameter(Mandatory = $true)]
-        [string] $ScriptName
+        [object] $Hook
     )
 
     if ($null -eq $Hook) {
-        return $false
+        return $null
     }
 
-    $json = $Hook | ConvertTo-Json -Depth 20 -Compress
-    return $json.Contains($ScriptName)
+    $commands = @()
+    foreach ($field in @("command", "commandWindows")) {
+        if ((Get-PropertyNames -Object $Hook) -contains $field -and $Hook.$field -is [string]) {
+            $commands += $Hook.$field
+        }
+    }
+
+    foreach ($command in $commands) {
+        if (-not $command.Contains("run_hook.py")) {
+            continue
+        }
+
+        foreach ($id in $ManagedHooks.Keys) {
+            if ($command -match ('run_hook\.py["'']?\s+' + [regex]::Escape($id) + '(\s|$)')) {
+                return $id
+            }
+        }
+
+        foreach ($id in $ManagedHooks.Keys) {
+            foreach ($legacyScript in $ManagedHooks[$id]) {
+                if ($command.Contains($legacyScript)) {
+                    return $id
+                }
+            }
+        }
+    }
+
+    return $null
 }
 
 # Returns an object's property names as an array. Set-StrictMode -Version Latest makes member
@@ -163,12 +207,12 @@ function Sync-ContainerMatcher {
     param(
         [object[]] $ExistingContainers,
         [object] $TemplateContainer,
-        [string[]] $ScriptNames,
+        [string[]] $HookIds,
         [string] $Name,
         [string] $EventName
     )
 
-    if ($null -eq $ScriptNames -or $ScriptNames.Count -eq 0) {
+    if ($null -eq $HookIds -or $HookIds.Count -eq 0) {
         return $false
     }
 
@@ -181,14 +225,8 @@ function Sync-ContainerMatcher {
     foreach ($container in $ExistingContainers) {
         $holdsManaged = $false
         foreach ($existingHook in (Get-CodexContainerHooks -Container $container)) {
-            foreach ($scriptName in $ScriptNames) {
-                if (Test-HookContainsScript -Hook $existingHook -ScriptName $scriptName) {
-                    $holdsManaged = $true
-                    break
-                }
-            }
-
-            if ($holdsManaged) {
+            if ($HookIds -contains (Get-ManagedHookId -Hook $existingHook)) {
+                $holdsManaged = $true
                 break
             }
         }
@@ -214,16 +252,14 @@ function Sync-ContainerMatcher {
     return $updated
 }
 
-# Keeps an already-installed managed hook entry in step with the template. Without this a
-# command change never reaches an existing install: Test-HookContainsScript only asks whether the
-# script file name appears somewhere in the entry, and both the old and the new command mention
-# run_hook.py, so nothing is ever "missing" and nothing is added. Only entries that already hold
-# a managed script are touched, and only the fields the template declares.
+# Keeps an already-installed managed hook entry in step with the template, so a changed command,
+# timeout, or status message reaches an existing install. Only the fields the template declares
+# are touched.
 function Sync-ManagedHookEntry {
     param(
-        [object[]] $ExistingContainers,
+        [object] $ExistingHook,
         [object] $TemplateHook,
-        [string] $ScriptName,
+        [string] $HookId,
         [string] $Name,
         [string] $EventName
     )
@@ -231,40 +267,103 @@ function Sync-ManagedHookEntry {
     $syncFields = @("command", "commandWindows", "timeout", "statusMessage")
     $updated = $false
 
-    foreach ($container in $ExistingContainers) {
-        foreach ($existingHook in (Get-CodexContainerHooks -Container $container)) {
-            if (-not (Test-HookContainsScript -Hook $existingHook -ScriptName $ScriptName)) {
+    foreach ($field in $syncFields) {
+        if (-not ((Get-PropertyNames -Object $TemplateHook) -contains $field)) {
+            continue
+        }
+
+        $templateValue = $TemplateHook.$field
+        if ((Get-PropertyNames -Object $ExistingHook) -contains $field) {
+            if ($ExistingHook.$field -eq $templateValue) {
                 continue
             }
 
-            foreach ($field in $syncFields) {
-                if (-not ((Get-PropertyNames -Object $TemplateHook) -contains $field)) {
-                    continue
-                }
-
-                $templateValue = $TemplateHook.$field
-                if ((Get-PropertyNames -Object $existingHook) -contains $field) {
-                    if ($existingHook.$field -eq $templateValue) {
-                        continue
-                    }
-
-                    $existingHook.$field = $templateValue
-                } else {
-                    $existingHook | Add-Member -NotePropertyName $field -NotePropertyValue $templateValue
-                }
-
-                Write-Host "Updated $Name $EventName $field for $ScriptName"
-                $updated = $true
-            }
+            $ExistingHook.$field = $templateValue
+        } else {
+            $ExistingHook | Add-Member -NotePropertyName $field -NotePropertyValue $templateValue
         }
+
+        Write-Host "Updated $Name $EventName $field for $HookId"
+        $updated = $true
     }
 
     return $updated
 }
 
+# Returns every hook entry across the given containers that runs the managed hook $HookId, in
+# file order. An install that predates the single runner has one legacy entry per script, so the
+# pre-tool id can match two entries here.
+function Find-ManagedHookEntries {
+    param(
+        [object[]] $ExistingContainers,
+        [string] $HookId
+    )
+
+    $found = @()
+    foreach ($container in $ExistingContainers) {
+        foreach ($existingHook in (Get-CodexContainerHooks -Container $container)) {
+            if ((Get-ManagedHookId -Hook $existingHook) -eq $HookId) {
+                $found += $existingHook
+            }
+        }
+    }
+
+    return , $found
+}
+
+# Removes the given hook entries from whichever containers hold them and returns the containers
+# that this left with no hooks at all. Entries are matched by reference, never by content, so a
+# user's own hook that happens to look the same is never removed.
+function Remove-HookEntries {
+    param(
+        [object[]] $ExistingContainers,
+        [object[]] $Entries
+    )
+
+    $emptied = @()
+    foreach ($container in $ExistingContainers) {
+        $hooks = @(Get-CodexContainerHooks -Container $container)
+        if ($hooks.Count -eq 0) {
+            continue
+        }
+
+        $kept = @()
+        foreach ($existingHook in $hooks) {
+            $isTarget = $false
+            foreach ($entry in $Entries) {
+                if ([object]::ReferenceEquals($existingHook, $entry)) {
+                    $isTarget = $true
+                    break
+                }
+            }
+
+            if (-not $isTarget) {
+                $kept += $existingHook
+            }
+        }
+
+        if ($kept.Count -eq $hooks.Count) {
+            continue
+        }
+
+        $container.hooks = $kept
+        if ($kept.Count -eq 0) {
+            $emptied += $container
+        }
+    }
+
+    return , $emptied
+}
+
 # Merges hook containers shaped like { "hooks": { "<Event>": [ { "matcher": ..., "hooks": [...] } ] } }.
 # Both Codex (%USERPROFILE%\.codex\hooks.json) and Claude Code (%USERPROFILE%\.claude\settings.json)
 # use this layout.
+#
+# Each template hook is a managed id (pre-tool, post-tool, stop). For each one, the first existing
+# entry that runs it, in its current or legacy form, is kept and brought in step with the
+# template; any further entries for the same id are removed, which is how the two legacy pre-tool
+# entries collapse into one. A container left empty only by that removal is dropped too. Hooks
+# that do not launch run_hook.py are never touched.
 function Merge-ContainerConfig {
     param(
         [Parameter(Mandatory = $true)]
@@ -286,34 +385,38 @@ function Merge-ContainerConfig {
         }
 
         $existingContainers = @($Existing.hooks.$eventName)
+        $emptiedContainers = @()
         foreach ($templateContainer in $templateContainers) {
             $missingHooks = @()
-            $templateScriptNames = @()
+            $templateHookIds = @()
             foreach ($templateHook in @($templateContainer.hooks)) {
-                $scriptName = $ManagedScripts | Where-Object { Test-HookContainsScript -Hook $templateHook -ScriptName $_ } | Select-Object -First 1
-                if (-not $scriptName) {
+                $hookId = Get-ManagedHookId -Hook $templateHook
+                if (-not $hookId) {
                     continue
                 }
 
-                $templateScriptNames += $scriptName
+                $templateHookIds += $hookId
 
-                $alreadyInstalled = $existingContainers |
-                    ForEach-Object { Get-CodexContainerHooks -Container $_ } |
-                    Where-Object { Test-HookContainsScript -Hook $_ -ScriptName $scriptName } |
-                    Select-Object -First 1
-                if ($alreadyInstalled) {
-                    if (Sync-ManagedHookEntry -ExistingContainers $existingContainers -TemplateHook $templateHook -ScriptName $scriptName -Name $Name -EventName $eventName) {
-                        $changed = $true
-                    }
-
+                $installed = Find-ManagedHookEntries -ExistingContainers $existingContainers -HookId $hookId
+                if ($installed.Count -eq 0) {
+                    $missingHooks += $templateHook
+                    Write-Host "Added $Name $eventName hook for $hookId"
                     continue
                 }
 
-                $missingHooks += $templateHook
-                Write-Host "Added $Name $eventName hook for $scriptName"
+                if (Sync-ManagedHookEntry -ExistingHook $installed[0] -TemplateHook $templateHook -HookId $hookId -Name $Name -EventName $eventName) {
+                    $changed = $true
+                }
+
+                if ($installed.Count -gt 1) {
+                    $superseded = @($installed | Select-Object -Skip 1)
+                    $emptiedContainers += Remove-HookEntries -ExistingContainers $existingContainers -Entries $superseded
+                    Write-Host "Removed $($superseded.Count) superseded $Name $eventName hook entr$(if ($superseded.Count -eq 1) { 'y' } else { 'ies' }) for $hookId"
+                    $changed = $true
+                }
             }
 
-            if (Sync-ContainerMatcher -ExistingContainers $existingContainers -TemplateContainer $templateContainer -ScriptNames $templateScriptNames -Name $Name -EventName $eventName) {
+            if (Sync-ContainerMatcher -ExistingContainers $existingContainers -TemplateContainer $templateContainer -HookIds $templateHookIds -Name $Name -EventName $eventName) {
                 $changed = $true
             }
 
@@ -331,6 +434,16 @@ function Merge-ContainerConfig {
                 $existingContainers += $newContainer
             }
             $changed = $true
+        }
+
+        if ($emptiedContainers.Count -gt 0) {
+            $existingContainers = @(
+                $existingContainers | Where-Object {
+                    $candidate = $_
+                    $wasEmptied = $emptiedContainers | Where-Object { [object]::ReferenceEquals($_, $candidate) }
+                    -not ($wasEmptied -and @(Get-CodexContainerHooks -Container $candidate).Count -eq 0)
+                }
+            )
         }
 
         $Existing.hooks.$eventName = $existingContainers
@@ -392,13 +505,60 @@ function Install-Config {
     }
 }
 
+# Removes files an older install managed but the current layout no longer uses. Only the named
+# files are deleted, plus Python's bytecode cache beside them; a directory is removed only once
+# that leaves it empty, so anything a user put there stays, with a note saying so.
+function Remove-StaleManagedFiles {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Directory,
+
+        [Parameter(Mandatory = $true)]
+        [string[]] $FileNames,
+
+        [switch] $RemoveDirectoryWhenEmpty
+    )
+
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+        return
+    }
+
+    foreach ($fileName in $FileNames) {
+        $path = Join-Path $Directory $fileName
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            Remove-Item -LiteralPath $path -Force
+            Write-Host "Removed stale managed file $path"
+        }
+
+        $stem = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
+        $cacheDir = Join-Path $Directory "__pycache__"
+        if (Test-Path -LiteralPath $cacheDir -PathType Container) {
+            Get-ChildItem -LiteralPath $cacheDir -Filter "$stem.*.pyc" -File | Remove-Item -Force
+        }
+    }
+
+    if (-not $RemoveDirectoryWhenEmpty) {
+        return
+    }
+
+    $cacheDir = Join-Path $Directory "__pycache__"
+    if ((Test-Path -LiteralPath $cacheDir -PathType Container) -and -not (Get-ChildItem -LiteralPath $cacheDir -Force)) {
+        Remove-Item -LiteralPath $cacheDir -Force
+    }
+
+    if (Get-ChildItem -LiteralPath $Directory -Force) {
+        Write-Host "Left $Directory in place: it still holds files this installer did not put there."
+        return
+    }
+
+    Remove-Item -LiteralPath $Directory -Force
+    Write-Host "Removed stale managed directory $Directory"
+}
+
 function Copy-ManagedBundle {
     param(
         [Parameter(Mandatory = $true)]
         [string] $Name,
-
-        [Parameter(Mandatory = $true)]
-        [string] $SourceHooksDir,
 
         [Parameter(Mandatory = $true)]
         [string] $DestinationHooksDir
@@ -409,11 +569,16 @@ function Copy-ManagedBundle {
         return
     }
 
+    # One runner serves every harness. It finds the shared logic at %USERPROFILE%\src\agent_hooks,
+    # two levels above %USERPROFILE%\.<harness>\hooks\run_hook.py.
     New-Item -ItemType Directory -Force $DestinationHooksDir | Out-Null
-    New-Item -ItemType Directory -Force (Join-Path $DestinationHooksDir "scripts") | Out-Null
-    Copy-Item -Force (Join-Path $SourceHooksDir "run_hook.py") (Join-Path $DestinationHooksDir "run_hook.py")
-    Copy-Item -Recurse -Force (Join-Path $SourceHooksDir "scripts\*") (Join-Path $DestinationHooksDir "scripts")
+    Copy-Item -Force (Join-Path $RepoRoot "bin\run_hook.py") (Join-Path $DestinationHooksDir "run_hook.py")
     Copy-Item -Recurse -Force (Join-Path $RepoRoot "src") $env:USERPROFILE
+
+    # Earlier installs copied per-script wrappers into hooks\scripts and a bootstrap module into
+    # the shared package. Nothing runs them any more.
+    Remove-StaleManagedFiles -Directory (Join-Path $DestinationHooksDir "scripts") -FileNames $LegacyBundleScripts -RemoveDirectoryWhenEmpty
+    Remove-StaleManagedFiles -Directory (Join-Path $env:USERPROFILE "src\agent_hooks") -FileNames $LegacyPackageModules
     Write-Host "Refreshed managed $Name runtime files."
 }
 
@@ -482,7 +647,6 @@ Install-Config `
 
 Copy-ManagedBundle `
     -Name "Claude Code" `
-    -SourceHooksDir (Join-Path $RepoRoot ".claude\hooks") `
     -DestinationHooksDir $claudeHooksDir
 
 # Codex keeps a trusted_hash per hook under [hooks.state] in config.toml. Any change to a hook
@@ -497,7 +661,6 @@ Install-Config `
 
 Copy-ManagedBundle `
     -Name "Codex" `
-    -SourceHooksDir (Join-Path $RepoRoot ".codex\hooks") `
     -DestinationHooksDir $codexHooksDir
 
 Install-ManagedFile `

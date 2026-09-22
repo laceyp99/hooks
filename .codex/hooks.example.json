@@ -6,17 +6,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.codex/hooks/run_hook.py\" \"$HOME/.codex/hooks/scripts/pre_tool_security.py\"",
-            "commandWindows": "python \"$HOME/.codex/hooks/run_hook.py\" \"$HOME/.codex/hooks/scripts/pre_tool_security.py\"",
+            "command": "python3 \"$HOME/.codex/hooks/run_hook.py\" pre-tool",
+            "commandWindows": "python \"$HOME/.codex/hooks/run_hook.py\" pre-tool",
             "timeout": 30,
-            "statusMessage": "Checking protected paths"
-          },
-          {
-            "type": "command",
-            "command": "python3 \"$HOME/.codex/hooks/run_hook.py\" \"$HOME/.codex/hooks/scripts/pre_tool_dangerous_commands.py\"",
-            "commandWindows": "python \"$HOME/.codex/hooks/run_hook.py\" \"$HOME/.codex/hooks/scripts/pre_tool_dangerous_commands.py\"",
-            "timeout": 30,
-            "statusMessage": "Checking dangerous commands"
+            "statusMessage": "Checking protected paths and dangerous commands"
           }
         ]
       }
@@ -27,8 +20,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.codex/hooks/run_hook.py\" \"$HOME/.codex/hooks/scripts/post_tool_cleaner.py\"",
-            "commandWindows": "python \"$HOME/.codex/hooks/run_hook.py\" \"$HOME/.codex/hooks/scripts/post_tool_cleaner.py\"",
+            "command": "python3 \"$HOME/.codex/hooks/run_hook.py\" post-tool",
+            "commandWindows": "python \"$HOME/.codex/hooks/run_hook.py\" post-tool",
             "timeout": 30,
             "statusMessage": "Cleaning edited Python files"
           }
@@ -40,8 +33,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.codex/hooks/run_hook.py\" \"$HOME/.codex/hooks/scripts/session_stop.py\"",
-            "commandWindows": "python \"$HOME/.codex/hooks/run_hook.py\" \"$HOME/.codex/hooks/scripts/session_stop.py\"",
+            "command": "python3 \"$HOME/.codex/hooks/run_hook.py\" stop",
+            "commandWindows": "python \"$HOME/.codex/hooks/run_hook.py\" stop",
             "timeout": 120,
             "statusMessage": "Running session stop checks"
           }
