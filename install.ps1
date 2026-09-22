@@ -432,7 +432,7 @@ function Install-ManagedFile {
         [string] $DestinationPath
     )
 
-    if (-not (Ask-YesNo "Refresh managed $Name?")) {
+    if (-not (Ask-YesNo "Refresh managed ${Name}?")) {
         Write-Host "Skipped $Name."
         return
     }
