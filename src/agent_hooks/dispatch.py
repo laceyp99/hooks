@@ -12,7 +12,7 @@ import traceback
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from agent_hooks import dangerous_commands, post_tool_cleaner, security, session_stop
+from agent_hooks import dangerous_commands, security
 from agent_hooks.common import emit_response, load_stdin_payload
 
 Response = dict[str, Any]
@@ -71,8 +71,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         emit_response(response)
         return 1 if failed and response is None else 0
 
+    # The Ruff hooks are imported only for their own events, so the pre-tool path, which runs
+    # on every tool call, never pays for loading them.
     if event == "post-tool":
+        from agent_hooks import post_tool_cleaner
+
         emit_response(post_tool_cleaner.evaluate(payload))
     else:
+        from agent_hooks import session_stop
+
         emit_response(session_stop.evaluate(payload))
     return 0

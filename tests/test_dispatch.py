@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import io
 import json
 import os
@@ -131,7 +132,7 @@ def test_pre_tool_reports_a_crash_that_left_no_decision(monkeypatch) -> None:
 )
 def test_ruff_events_route_to_their_hook(monkeypatch, event: str, module_name: str) -> None:
     received = []
-    module = getattr(dispatch, module_name)
+    module = importlib.import_module("agent_hooks." + module_name)
 
     def _fake_evaluate(payload):
         received.append(payload)
