@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
@@ -84,12 +84,23 @@ async function runHook(
 	}
 
 	const [command, extraArgs] = resolvePythonCommand();
-	const child = spawn(command, [...extraArgs, runHookPath, scriptPath], {
-		cwd: process.cwd(),
-		env: { ...process.env },
-		stdio: ["pipe", "pipe", "pipe"],
-		signal,
-	});
+	let child: ChildProcessWithoutNullStreams;
+	try {
+		child = spawn(command, [...extraArgs, runHookPath, scriptPath], {
+			cwd: process.cwd(),
+			env: { ...process.env },
+			stdio: ["pipe", "pipe", "pipe"],
+			signal,
+		});
+	} catch (error) {
+		console.warn(`[agent-hooks] ${scriptName} could not start: ${String(error)}`);
+		return undefined;
+	}
+
+	// If the interpreter is missing or the child dies before reading its payload, writing to
+	// stdin fails with EPIPE. Without a listener that error is uncaught and takes down the host
+	// process instead of just skipping this hook. The exit code already reports the failure.
+	child.stdin.on("error", () => {});
 
 	let stdout = "";
 	let stderr = "";

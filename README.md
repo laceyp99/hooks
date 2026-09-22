@@ -2,7 +2,7 @@
 
 Local guardrails for coding agents. The hooks block a small set of genuinely dangerous actions, keep secrets out of an agent's reach, and tidy Python as you go.
 
-One set of Python hook logic is shared by three harnesses: **Claude Code**, **Codex**, and **Pi**. Each harness gets a thin wrapper; the behavior lives once, under `src/agent_hooks/`.
+One set of Python hook logic is shared by four harnesses: **Claude Code**, **Codex**, **Pi**, and **OpenCode**. Each harness gets a thin wrapper; the behavior lives once, under `src/agent_hooks/`.
 
 ## Quick start
 
@@ -24,7 +24,7 @@ git clone https://github.com/laceyp99/hooks.git "$env:USERPROFILE\code\agent-hoo
 cd "$env:USERPROFILE\code\agent-hooks"
 ```
 
-Any folder works, with one exception: the **Pi** bridge looks for the checkout at `%USERPROFILE%\code\agent-hooks` unless you set `AGENT_HOOKS_ROOT`. If you only use Claude Code and Codex, put it wherever you like.
+Any folder works, with one exception: the **Pi** and **OpenCode** bridges look for the checkout at `%USERPROFILE%\code\agent-hooks` unless you set `AGENT_HOOKS_ROOT`. If you only use Claude Code and Codex, put it wherever you like.
 
 ### 3. Run the installer
 
@@ -42,7 +42,7 @@ Every write is backed up first to a timestamped `.bak-*` file next to the origin
 
 Open the Codex TUI after installing and approve the hooks when prompted. The installer prints a reminder whenever it writes `hooks.json`.
 
-Claude Code and Pi have no equivalent step.
+Claude Code, Pi, and OpenCode have no equivalent step. OpenCode loads every file in its plugin directory automatically, with nothing to approve.
 
 ### 5. Verify it works
 
@@ -138,6 +138,8 @@ A repo opts in via any of:
 | PostToolUse | `Edit`, `MultiEdit`, `Write`, `NotebookEdit` |
 | Stop | every stop |
 
+Those are Claude Code's tool names. Every harness is matched against the same sets, case-insensitively, so OpenCode's lowercase `bash`, `edit`, `write`, `read`, and `apply_patch` land on the same rules; `glob` and `grep` touch no files and are not checked. Argument field names are matched the same way, which is why OpenCode's camelCase `filePath` is recognized alongside Claude Code's `file_path`. `apply_patch` sends its patch in `patchText`; the patch is recognized by its opening `*** Begin Patch` marker rather than by the field name, so only its file headers are inspected, as with Codex.
+
 ### Interpreter selection
 
 Each hook launch goes through a bootstrapper that picks a Python in a predictable order: the project virtual environment first, then the current interpreter, with a Windows fallback to `py -3.10` if the active interpreter is too old.
@@ -150,6 +152,7 @@ Worth knowing before you rely on these:
 - **Bulk staging is not covered.** `git add .`, `git add -A`, and `git commit -a` will happily stage a secret file, because the command never names it. The guard cannot see this without consulting repository state. **Put the file in `.gitignore`** — that is the reliable fix, and a project-level `pre-commit` hook is the right place to enforce it for repos that need it.
 - **The shell-command check uses a list of access verbs.** An unusual reader not on that list will pass. Tools that name a file in a dedicated field have no such gap.
 - **A secret committed once stays in history.** Deleting it in a later commit does not remove it from earlier commits. If it was pushed, rotate the secret; cleaning history needs a rewrite.
+- **OpenCode cannot block at the end of a session.** Its only session-completion signal is the `session.idle` event, which fires after every turn the agent finishes and has no way to refuse. The Ruff sweep therefore *reports* on OpenCode where Claude Code's `Stop` hook would block, so `AGENT_HOOKS_STOP_FIX` still governs whether files are rewritten but a finding never holds the session open.
 - **These are guardrails, not a security boundary.** They exist to stop an agent's honest mistakes, not to withstand a determined adversary.
 
 ## Updating
@@ -176,21 +179,36 @@ Two things to know:
 | Claude Code registration | the `hooks` key of `%USERPROFILE%\.claude\settings.json` |
 | Codex registration | `%USERPROFILE%\.codex\hooks.json` |
 | Pi bridge | `%USERPROFILE%\.pi\agent\extensions\agent-hooks.ts` |
-| Checked-in templates | `.claude/settings.example.json`, `.codex/hooks.example.json` |
+| OpenCode plugin | `%USERPROFILE%\.config\opencode\plugins\agent-hooks.ts`, or under `%XDG_CONFIG_HOME%\opencode\plugins\` when that is set |
+| Checked-in templates | `.claude/settings.example.json`, `.codex/hooks.example.json`, `.opencode/agent-hooks.example.ts` |
 | Shared logic, installed copy | `%USERPROFILE%\src\agent_hooks\` |
 
 - Keep `cwd` set to `"."` so repo-aware hooks operate on the active project rather than the hooks bundle.
 - `command` targets POSIX shells and uses `python3`; `commandWindows` runs under PowerShell. Both templates use the same `"$HOME/..."` path form.
 - The Claude Code and Codex files differ where each harness needs different paths or command syntax. That is expected.
 
-### Pi-specific environment variables
+### Bridge environment variables
+
+These apply to the two TypeScript bridges, **Pi** and **OpenCode**.
 
 | Variable | Purpose |
 |---|---|
 | `AGENT_HOOKS_ROOT` | Path to this checkout, if it is not at `%USERPROFILE%\code\agent-hooks` |
 | `AGENT_HOOKS_PYTHON` | Python executable to use, if `python.exe` is not on `PATH` |
 
-Unlike the other two harnesses, the installed Pi extension is only a TypeScript bridge; it calls back into this source checkout to run the Python hooks. Keep the checkout in place.
+Unlike Claude Code and Codex, these two install only a TypeScript bridge; it calls back into this source checkout to run the Python hooks. Keep the checkout in place.
+
+The OpenCode plugin is a single auto-loaded file, so installing it is the whole registration step. It runs the same four scripts, mapped onto OpenCode's own hooks:
+
+| OpenCode hook | Scripts | Notes |
+|---|---|---|
+| `tool.execute.before` | `pre_tool_security.py`, `pre_tool_dangerous_commands.py` | Denies by throwing; the reason reaches the model as the failed tool call |
+| `tool.execute.after` | `post_tool_cleaner.py` | Appends any Ruff summary to the tool's output |
+| `event` (`session.idle`) | `session_stop.py` | Reports only, one sweep at a time; see [Known limits](#known-limits) |
+
+The plugin skips the guards for OpenCode built-ins that neither name a file nor run a command, such as `glob`, `grep`, `todowrite`, and `webfetch`, and runs the cleaner only for tools that write. Each hook costs a couple of Python startups, so this keeps read-only tool calls fast. Any tool it does not recognize, including MCP tools, still goes through the guards.
+
+The checked-in plugin is `.opencode/agent-hooks.example.ts`, deliberately outside `.opencode/plugins/`. OpenCode scans that directory in whatever project it runs in, so a copy there would load a second time whenever OpenCode runs inside this repo.
 
 ## Manual installation
 
@@ -237,6 +255,18 @@ Copy-Item -Force ".pi\agent\extensions\agent-hooks.ts" "$env:USERPROFILE\.pi\age
 ```
 
 Back up any existing bridge first if you have local edits.
+</details>
+
+<details>
+<summary>OpenCode</summary>
+
+```powershell
+$configRoot = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { "$env:USERPROFILE\.config" }
+New-Item -ItemType Directory -Force "$configRoot\opencode\plugins" | Out-Null
+Copy-Item -Force ".opencode\agent-hooks.example.ts" "$configRoot\opencode\plugins\agent-hooks.ts"
+```
+
+That is the whole registration: OpenCode loads every file in the plugin directory at startup, so there is no config entry to add. Copy it to `.opencode/plugins/agent-hooks.ts` inside a project instead if you want the guards in that project only. Back up any existing plugin first if you have local edits.
 </details>
 
 ## Troubleshooting
@@ -296,6 +326,7 @@ Remove-Item -Recurse -Force "$env:USERPROFILE\.claude\hooks"
 Remove-Item -Recurse -Force "$env:USERPROFILE\.codex\hooks"
 Remove-Item -Recurse -Force "$env:USERPROFILE\src\agent_hooks"
 Remove-Item -Force "$env:USERPROFILE\.pi\agent\extensions\agent-hooks.ts"
+Remove-Item -Force "$(if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { "$env:USERPROFILE\.config" })\opencode\plugins\agent-hooks.ts"
 ```
 
 Your timestamped `.bak-*` files are left in place; delete them once you are satisfied.
