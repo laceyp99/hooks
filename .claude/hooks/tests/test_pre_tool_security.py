@@ -171,7 +171,7 @@ def test_inspects_patch_targets_but_not_patch_body(pre_tool_security) -> None:
         ("PowerShell", True, False),
         ("pwsh", True, False),
         ("Glob", False, False),
-        ("Grep", False, False),
+        ("Grep", True, False),
     ],
 )
 def test_claude_code_tool_names_are_recognized(

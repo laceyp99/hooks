@@ -40,9 +40,9 @@ def test_security_recognizes_opencode_file_tools(pre_tool_security) -> None:
     for tool_name in ("bash", "edit", "write", "read"):
         assert pre_tool_security._should_check(tool_name) is True
 
-    # glob and grep only search; they never touch a file's contents directly.
+    # glob returns paths only. grep returns file contents, so its path and include are checked.
     assert pre_tool_security._should_check("glob") is False
-    assert pre_tool_security._should_check("grep") is False
+    assert pre_tool_security._should_check("grep") is True
 
 
 def test_security_treats_edit_and_write_as_mutating_but_not_bash_or_read(
@@ -208,11 +208,14 @@ def test_main_denies_opencode_bash_rm_rf_root(pre_tool_dangerous_commands, monke
 def test_main_ignores_opencode_glob_and_grep_for_secret_patterns(
     pre_tool_security, monkeypatch
 ) -> None:
-    """glob/grep only search; naming a secret file in a pattern is not access to it."""
+    """Naming a secret file in a search pattern is not access to it.
+
+    grep's ``path`` is a real target and is checked; its regex ``pattern`` never is.
+    """
     target = _dot("env")
     payloads = [
         {"tool_name": "glob", "tool_input": {"pattern": f"**/{target}"}},
-        {"tool_name": "grep", "tool_input": {"pattern": target, "path": target}},
+        {"tool_name": "grep", "tool_input": {"pattern": target, "path": "src"}},
     ]
 
     for payload in payloads:
