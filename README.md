@@ -179,6 +179,33 @@ Two things to know:
 - The installer **reconciles managed hook entries** with the template, so a corrected command or matcher reaches an existing install. If you hand-edited a managed hook's command, that edit is overwritten. Your own unmanaged hooks are never touched, and a backup is written first.
 - **Codex re-trust.** Any change to a hook command invalidates Codex's trust hash, so re-approve the hooks in the Codex TUI after an update. Until you do, Codex skips them silently.
 
+### Updating from a per-script install
+
+Installs made before the single runner registered one hook per script: `pre_tool_security.py` and `pre_tool_dangerous_commands.py` for PreToolUse, and a script path for each of the other events. The installer migrates those to one entry per event, so there is nothing to edit by hand. It helps to know exactly what it changes.
+
+**What it rewrites**
+
+- The two PreToolUse entries collapse into one `run_hook.py pre-tool`, and the post-tool and stop entries are rewritten to `post-tool` and `stop`. A container left empty by the collapse is removed.
+- The PreToolUse matcher becomes `Bash|PowerShell|Edit|MultiEdit|Write|NotebookEdit|Read|Grep|mcp__.*`. **The matcher belongs to the container**, so one of your own hooks sharing that container starts firing on `Grep` and MCP tools too. Move it to its own container first if you do not want that.
+- Any entry whose command mentions `run_hook.py` counts as managed, and its command, timeout, and status message are reset to the template's. A hand-tuned timeout does not survive.
+- `settings.json` is rewritten whole, so indentation is normalized and non-ASCII characters come back as `\uXXXX` escapes. Only the `hooks` key changes in substance; the file is written as UTF-8 with no byte order mark.
+
+**What it deletes**
+
+- The five per-script files and their `.pyc` files under each harness's `hooks\scripts`, and `bootstrap.py` from `%USERPROFILE%\src\agent_hooks`. A directory holding anything else keeps that file and stays.
+
+**Before and after**
+
+Every write is backed up to a timestamped `.bak-*` beside the original, so comparing the two is the check that matters:
+
+```powershell
+$settings = "$env:USERPROFILE\.claude\settings.json"
+$backup = Get-ChildItem "$settings.bak-*" | Sort-Object LastWriteTime | Select-Object -Last 1
+git diff --no-index $backup.FullName $settings
+```
+
+Then confirm the hooks still fire, with the [verification snippets](#5-verify-it-works). Restoring is a copy: `Copy-Item $backup.FullName $settings -Force`.
+
 ## Configuration
 
 | What | Where |
