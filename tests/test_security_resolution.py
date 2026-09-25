@@ -128,6 +128,14 @@ def test_read_through_a_file_symlink_to_a_secret_is_denied(project, monkeypatch)
     assert decision == "deny"
 
 
+def test_shell_reader_through_a_file_symlink_to_a_secret_is_denied(project, monkeypatch) -> None:
+    _symlink(project / "notes.txt", project / ENV)
+
+    payload = _call("Bash", {"command": "wc -c notes.txt"}, project)
+
+    assert _decide(payload, monkeypatch) == "deny"
+
+
 def test_read_through_a_file_symlink_to_a_template_is_allowed(project, monkeypatch) -> None:
     _symlink(project / "notes.txt", project / TEMPLATE)
 
@@ -222,6 +230,14 @@ def test_hard_link_to_a_secret_in_the_same_directory_is_denied(project, monkeypa
     decision = _decide(_call("Read", {"file_path": "notes.txt"}, project), monkeypatch)
 
     assert decision == "deny"
+
+
+def test_shell_reader_through_a_hard_link_to_a_secret_is_denied(project, monkeypatch) -> None:
+    os.link(project / ENV, project / "notes.txt")
+
+    payload = _call("PowerShell", {"command": "(Get-Item notes.txt).Length"}, project)
+
+    assert _decide(payload, monkeypatch) == "deny"
 
 
 def test_hard_link_elsewhere_to_a_secret_in_cwd_is_denied(project, monkeypatch) -> None:
@@ -423,8 +439,14 @@ def test_grep_on_a_template_is_allowed(project, monkeypatch, tool_name: str) -> 
         f"{{{ENV},*.py}}",
         "*.{env,py}",
         "**/" + _dot("envrc"),
+        "**/" + _dot("env") + ".development",
+        "**/" + _dot("envrc") + ".local",
+        "**/.secrets.local",
         "*.secret",
         "*.secrets",
+        "*.pem",
+        "**/credentials.json",
+        "**/id_rsa",
         "**/" + _dot("direnv") + "/**",
         ENV.upper(),
     ],
@@ -493,6 +515,13 @@ def test_mcp_read_of_a_secret_is_denied(project, monkeypatch) -> None:
     assert _decide(payload, monkeypatch) == "deny"
 
 
+@pytest.mark.parametrize("field", ["file", "filePath", "local_file", "localPath", "upload_path"])
+def test_mcp_upload_of_a_secret_is_denied(project, monkeypatch, field: str) -> None:
+    payload = _call("mcp__browser__file_upload", {field: str(project / ENV)}, project)
+
+    assert _decide(payload, monkeypatch) == "deny"
+
+
 def test_mcp_read_of_several_files_including_a_secret_is_denied(project, monkeypatch) -> None:
     tool_input = {"paths": ["readme.md", ENV]}
 
@@ -556,14 +585,12 @@ def test_interpreter_argument_naming_a_secret_is_denied() -> None:
     assert security._find_env_access_in_command(f"python -c \"open('{ENV}')\"") == ENV
 
 
-@pytest.mark.xfail(strict=True, reason="a path built at runtime by printf is invisible to a hook")
 def test_printf_constructed_path_is_denied() -> None:
     command = "cat \"$(printf '.%s' env)\""
 
     assert security._find_env_access_in_command(command) is not None
 
 
-@pytest.mark.xfail(strict=True, reason="a name concatenated inside interpreter code is not parsed")
 def test_interpreter_concatenated_name_is_denied() -> None:
     command = "python -c \"open('.e' + 'nv').read()\""
 

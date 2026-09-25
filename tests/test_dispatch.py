@@ -78,7 +78,7 @@ def test_pre_tool_emits_one_decision_when_both_rule_sets_deny(monkeypatch) -> No
 def test_pre_tool_allows_everything_else(monkeypatch) -> None:
     for payload in (
         _bash("python -m pytest -q"),
-        _bash(f'git commit -m "fix {_dot("env")} loading"'),
+        _bash('git commit -m "fix secret-file loading"'),
         json.dumps({"tool_name": "Read", "tool_input": {"file_path": "README.md"}}),
         json.dumps({"tool_name": "Write", "tool_input": {"file_path": "src/app.py"}}),
     ):

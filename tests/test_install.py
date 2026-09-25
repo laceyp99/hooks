@@ -63,6 +63,10 @@ def _legacy_claude_settings() -> dict:
     """What the installer wrote before the single runner, plus a user's own settings."""
     return {
         "model": "keep-me",
+        "permissions": {
+            "deny": ["Bash(rm *)"],
+            "allow": ["Read(./docs/**)"],
+        },
         "hooks": {
             "PreToolUse": [
                 {
@@ -196,6 +200,9 @@ def test_migrates_a_legacy_claude_install_to_one_pre_tool_entry(legacy_profile) 
     settings = _read_json(settings_path)
 
     assert settings["model"] == "keep-me"
+    assert settings["permissions"]["deny"][0] == "Bash(rm *)"
+    assert set(template["permissions"]["deny"]).issubset(settings["permissions"]["deny"])
+    assert settings["permissions"]["allow"] == ["Read(./docs/**)"]
     assert len(_backups(settings_path)) == 1
     assert "scripts" not in json.dumps(settings["hooks"])
 
