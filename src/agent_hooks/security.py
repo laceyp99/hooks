@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -25,6 +26,8 @@ PROTECTED_ENV_EXACT_NAMES = {
     ".env",
     ".envrc",
     ".secrets",
+    "credentials.json",
+    "id_rsa",
     "local.env",
     "secrets.env",
 }
@@ -39,6 +42,7 @@ PROTECTED_ENV_SUFFIXES = (
     ".env",
     ".secret",
     ".secrets",
+    ".pem",
 )
 
 PROTECTED_ENV_PATH_PARTS = {
@@ -93,116 +97,6 @@ SHELL_COMMAND_TOOLS = {
     "run_command",
 }
 
-# Programs that read, write, move, or delete a file named on their command line. A protected
-# name that appears without one of these is being *talked about* rather than touched: a commit
-# message, a PR body, a grep pattern. The git rule already gates on a mutation verb this way;
-# without the same gate here, `git commit -m "fix .env loading"` was denied.
-ENV_ACCESS_COMMANDS = frozenset(
-    {
-        ".",
-        "add-content",
-        "awk",
-        "bat",
-        "cat",
-        "clear-content",
-        "code",
-        "copy-item",
-        "cp",
-        "del",
-        "emacs",
-        "erase",
-        "gc",
-        "get-content",
-        "head",
-        "install",
-        "less",
-        "ln",
-        "more",
-        "move-item",
-        "mv",
-        "nano",
-        "new-item",
-        "notepad",
-        "od",
-        "out-file",
-        "remove-item",
-        "rename-item",
-        "rm",
-        "rmdir",
-        "rsync",
-        "scp",
-        "sed",
-        "set-content",
-        "source",
-        "strings",
-        "subl",
-        "tail",
-        "tee",
-        "tee-object",
-        "touch",
-        "type",
-        "vi",
-        "vim",
-        "xxd",
-    }
-)
-
-# Shells and interpreters carry another command line inside an argument this hook cannot parse.
-# Treating them as access verbs keeps `bash -c "cat <file>"` and `python -c "open('<file>')"`
-# denied on the name alone, which is what they did before the access gate existed.
-INTERPRETER_COMMANDS = frozenset(
-    {
-        "bash",
-        "bun",
-        "cmd",
-        "dash",
-        "deno",
-        "fish",
-        "irb",
-        "ksh",
-        "node",
-        "perl",
-        "php",
-        "powershell",
-        "pwsh",
-        "py",
-        "python",
-        "python2",
-        "python3",
-        "ruby",
-        "sh",
-        "zsh",
-    }
-)
-
-# ``git`` alone is not an access verb, or every commit message naming a protected file would be
-# denied. Only these subcommands touch the named file.
-GIT_ACCESS_SUBCOMMANDS = frozenset({"add", "checkout", "mv", "restore", "rm", "stage"})
-
-# Git global options that consume the next word, so the subcommand search can step past them.
-# Options spelled ``--flag=value`` carry their value already and need no special handling.
-GIT_VALUE_FLAGS = frozenset(
-    {
-        "-C",
-        "-c",
-        "--config-env",
-        "--exec-path",
-        "--git-dir",
-        "--namespace",
-        "--work-tree",
-    }
-)
-
-# Splits a command line into the segments a shell would run separately.
-COMMAND_SEGMENT_RE = re.compile(r"[;&|\r\n]+")
-
-# The file a redirect writes to is the token right after the operator. Everything else on an
-# ``echo ... >> file`` line is data, so ``echo ".env" >> .gitignore`` writes .gitignore only.
-REDIRECT_TARGET_RE = re.compile(r"\d*>>?\s*([^\s;&|<>]+)")
-
-# Leading ``VAR=value`` assignments and ``sudo`` sit in front of the real program name.
-ENV_ASSIGNMENT_RE = re.compile(r"^\w+=")
-
 PROTECTED_GIT_MUTATION_PATTERNS = (
     re.compile(r"(^|[;&|\r\n])\s*(?:sudo\s+)?rm\s+-[A-Za-z]*[rf][A-Za-z]*\b", re.IGNORECASE),
     re.compile(r"(^|[;&|\r\n])\s*rmdir\s+/s\s+/q\b", re.IGNORECASE),
@@ -243,9 +137,24 @@ MCP_MUTATION_WORDS = ("write", "edit", "create", "move", "delete", "rename")
 PROTECTED_GLOB_SAMPLES = (
     ".env",
     ".env.local",
+    ".env.development",
+    ".env.test",
+    ".env.staging",
     ".env.production",
+    ".env.production.local",
+    ".env.development.local",
+    ".env.test.local",
+    ".env.staging.local",
     ".envrc",
+    ".envrc.local",
+    ".secrets",
+    ".secrets.local",
+    "credentials.json",
+    "id_rsa",
+    "local.env",
     "prod.env",
+    "private.pem",
+    "secrets.env",
     "x.secret",
     "x.secrets",
     ".direnv/x",
@@ -271,6 +180,27 @@ PATH_SEPARATOR_RE = re.compile(r"([\\/])")
 # A hard-link lookup reads at most this many entries per directory, so a huge directory costs a
 # bounded amount rather than a walk.
 MAX_HARD_LINK_SCAN_ENTRIES = 4096
+
+STRING_LITERAL_RE = re.compile(r"(['\"])(.*?)\1")
+STRING_CONCAT_RE = re.compile(r"(['\"])([^'\"\r\n]*)\1\s*\+\s*(['\"])([^'\"\r\n]*)\3")
+PRINTF_FORMAT_RE = re.compile(
+    r"(?i)\bprintf\s+(['\"])([^'\"]*)\1\s+(?:'([^']*)'|\"([^\"]*)\"|([^\s;|)&]+))"
+)
+ASSIGNMENT_RE = re.compile(r"(?i)(?:\$)?([a-z_][a-z0-9_]*)\s*=\s*([^;|&\r\n]+)")
+VARIABLE_RE = re.compile(r"\$\{?([a-z_][a-z0-9_]*)\}?", re.IGNORECASE)
+OPAQUE_COMMAND_RE = re.compile(
+    r"(?i)(?:^|[\s;&|])(?:iex|invoke-expression|start-process)\b"
+    r"|(?:^|\s)-(?:e|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|"
+    r"encodedcomm|encodedcomma|encodedcomman|encodedcommand)\b"
+)
+VARIABLE_READER_RE = re.compile(
+    r"(?i)(?:get-content|get-item|get-childitem|gc|cat|type|select-string|sls|import-csv|"
+    r"get-filehash|format-hex|copy-item|move-item|remove-item|set-content|add-content|out-file|"
+    r"awk|sed|grep|rg|wc|head|tail|tac|nl|od|xxd|hexdump|strings|base64|cp|mv|dd|tar|zip|"
+    r"source|diff|cmp|sort|uniq|cut|paste|tee|curl|python|node|perl|ruby|"
+    r"readalltext|readalllines|readallbytes|openread|opentext|streamreader)\b[^;\r\n]*"
+    r"(?:\$\{?[a-z_][a-z0-9_]*\}?|%[a-z_][a-z0-9_]*%|\[[^\]]+\]::\w+\s*\()"
+)
 
 
 def _is_grep_tool(tool_name: str) -> bool:
@@ -350,6 +280,44 @@ def _matches_env_path(value: str) -> bool:
         for segment in parts[:-1]
         for name in _segment_names(segment)
     )
+
+
+def _matches_env_path_pattern(value: str) -> bool:
+    """Return whether a path or file glob can select a protected file."""
+    if _matches_env_path(value):
+        return True
+
+    normalized = value.strip().strip("\"'")
+    if "=" in normalized:
+        normalized = normalized.rsplit("=", 1)[-1]
+    normalized = normalized.lstrip("@").replace("\\", "/").lower()
+    if not normalized or not any(char in normalized for char in "*?["):
+        return False
+
+    parts = [part for part in normalized.split("/") if part]
+    if not parts:
+        return False
+
+    protected_names = (
+        ".env",
+        ".env.local",
+        ".env.production",
+        ".envrc",
+        ".envrc.local",
+        ".secrets",
+        ".secrets.local",
+        "credentials.json",
+        "id_rsa",
+        "local.env",
+        "prod.env",
+        "private.pem",
+        "secrets.env",
+        "x.secret",
+        "x.secrets",
+    )
+    if any(fnmatchcase(name, parts[-1]) for name in protected_names):
+        return True
+    return any(fnmatchcase(".direnv", part) for part in parts[:-1])
 
 
 def _matches_protected_git_path(value: str) -> bool:
@@ -694,119 +662,118 @@ def _find_protected_git_path(value: Any, cwd: str | None = None, tool_name: str 
     return None
 
 
-def _normalize_program_token(token: str) -> str:
-    stripped = token.strip("\"'")
-    if not stripped:
-        return ""
-
-    name = PurePath(stripped.replace("\\", "/")).name.lower()
-    if name.endswith(".exe"):
-        name = name[: -len(".exe")]
-
-    return name
-
-
-def _segment_words(segment: str) -> list[str]:
-    """Return a segment's words with leading ``VAR=value`` assignments and ``sudo`` dropped.
-
-    Stripping the prefixes here rather than in the caller keeps the program and its subcommand
-    adjacent, so ``sudo git add <file>`` reads the same as ``git add <file>``.
-    """
-    words: list[str] = []
-    for token in segment.split():
-        if not words and ENV_ASSIGNMENT_RE.match(token):
+def _static_shell_variables(command: str) -> dict[str, str]:
+    """Resolve simple literal shell and PowerShell assignments without executing them."""
+    variables: dict[str, str] = {}
+    for match in ASSIGNMENT_RE.finditer(command):
+        rhs = match.group(2).strip()
+        literals = list(STRING_LITERAL_RE.finditer(rhs))
+        if literals:
+            separators = rhs
+            for literal in reversed(literals):
+                separators = separators[: literal.start()] + separators[literal.end() :]
+            if not re.fullmatch(r"\s*(?:\+\s*)*", separators):
+                continue
+            value = "".join(literal.group(2) for literal in literals)
+        elif not any(char.isspace() for char in rhs):
+            value = rhs.strip("\"'")
+        else:
             continue
 
-        normalized = _normalize_program_token(token)
-        if not words and normalized == "sudo":
-            continue
-
-        if not normalized and not words:
-            continue
-
-        words.append(token)
-
-    return words
+        for _ in range(3):
+            value = VARIABLE_RE.sub(
+                lambda item: variables.get(item.group(1).lower(), item.group(0)), value
+            )
+        variables[match.group(1).lower()] = value
+    return variables
 
 
-def _segment_program(segment: str) -> str:
-    """Return the program a shell segment runs, lowercased and stripped of path and suffix."""
-    words = _segment_words(segment)
-    return _normalize_program_token(words[0]) if words else ""
+def _expand_static_shell_variables(command: str) -> str:
+    variables = _static_shell_variables(command)
+    if not variables:
+        return command
+    return VARIABLE_RE.sub(
+        lambda item: variables.get(item.group(1).lower(), item.group(0)), command
+    )
 
 
-def _git_subcommand(words: list[str]) -> str:
-    """Return the subcommand in ``git [global options] <subcommand> ...``.
+def _find_env_access_in_command(command: str, cwd: str | None = None) -> str | None:
+    """Block protected names and matching globs wherever they appear in shell text."""
+    expanded = _expand_static_shell_variables(command).replace("`", "")
+    if OPAQUE_COMMAND_RE.search(expanded):
+        return "opaque dynamic command"
 
-    Global options have to be stepped over, and the ones taking a separate value take the word
-    after them with it, or ``git -C . add <file>`` would read ``.`` as the subcommand.
-    """
-    index = 1
-    while index < len(words):
-        word = words[index]
-        if not word.startswith("-"):
-            return _normalize_program_token(word)
+    for match in PRINTF_FORMAT_RE.finditer(expanded):
+        argument = next(value for value in match.groups()[2:] if value is not None)
+        formatted = match.group(2).replace("%s", argument, 1)
+        if _matches_env_path_pattern(formatted):
+            return formatted
 
-        takes_value = word in GIT_VALUE_FLAGS
-        index += 2 if takes_value else 1
+    for _ in range(4):
+        for match in STRING_CONCAT_RE.finditer(expanded):
+            joined = match.group(2) + match.group(4)
+            if _matches_env_path_pattern(joined):
+                return joined
+            expanded = expanded[: match.start()] + "'" + joined + "'" + expanded[match.end() :]
 
-    return ""
+    for literal in STRING_LITERAL_RE.finditer(expanded):
+        escaped = re.sub(
+            r"\\x([0-9a-fA-F]{2})",
+            lambda item: chr(int(item.group(1), 16)),
+            literal.group(2),
+        )
+        escaped = re.sub(
+            r"\\u([0-9a-fA-F]{4})",
+            lambda item: chr(int(item.group(1), 16)),
+            escaped,
+        )
+        for part in iter_string_tokens(escaped):
+            if _matches_env_path_pattern(part):
+                return part
 
+    if re.search(r"(?i)\b(?:base64|frombase64string)\b", expanded):
+        for token in iter_string_tokens(expanded):
+            try:
+                decoded = base64.b64decode(token, validate=True)
+            except (ValueError, base64.binascii.Error):
+                continue
+            for encoding in ("utf-8", "utf-16-le"):
+                try:
+                    decoded_text = decoded.decode(encoding)
+                except UnicodeDecodeError:
+                    continue
+                if any(
+                    _matches_env_path_pattern(item.strip("(){}[],"))
+                    for item in iter_string_tokens(decoded_text)
+                ):
+                    return "encoded protected path"
 
-def _segment_accesses_files(segment: str) -> bool:
-    words = _segment_words(segment)
-    if not words:
-        return False
+    for token in iter_string_tokens(expanded):
+        candidate = (
+            token.strip(
+                "(){}",
+            )
+            .split(")", 1)[0]
+            .rstrip(",")
+        )
+        if _matches_env_path_pattern(candidate):
+            return candidate
+        if cwd and _find_resolved_env_target(candidate, cwd):
+            return candidate
 
-    program = _normalize_program_token(words[0])
-    if not program:
-        return False
-
-    if program in INTERPRETER_COMMANDS:
-        # An interpreter's argument is another command line this hook cannot parse. Reading the
-        # whole segment keeps `bash -c "cat <file>"` denied; narrowing it would open a bypass.
-        return True
-
-    if program == "git":
-        return _git_subcommand(words) in GIT_ACCESS_SUBCOMMANDS
-
-    return program in ENV_ACCESS_COMMANDS
-
-
-def _find_env_access_in_command(command: str) -> str | None:
-    """Return the protected name this command line actually touches.
-
-    A segment whose program reads or writes files puts every name on it in reach. Any other
-    segment only touches its redirect targets, so ``echo ".env" >> .gitignore`` is an ordinary
-    append and ``echo x >> .env`` is not.
-    """
-    for segment in COMMAND_SEGMENT_RE.split(command):
-        if not segment.strip():
-            continue
-
-        if _segment_accesses_files(segment):
-            # Report the token, not the whole segment, so the deny reason names the file.
-            for token in iter_string_tokens(segment):
-                if _matches_env_path(token):
-                    return token
-            continue
-
-        for target in REDIRECT_TARGET_RE.findall(segment):
-            match = first_matching_string(target.strip("\"'"), _matches_env_path)
-            if match:
-                return match
-
+    if VARIABLE_READER_RE.search(expanded):
+        return "dynamic file path"
     return None
 
 
 def _find_env_path_in_shell_payload(value: Any, cwd: str | None = None) -> str | None:
     """Env check for shell tools: command fields are gated, file-target fields are not.
 
-    Command tokens are matched by name only; resolving every word of a command line would be
-    slow and mostly meaningless. A dedicated file-target field is resolved like any other.
+    Command tokens are checked by name and against nearby links, independent of command name.
+    A dedicated file-target field is resolved like any other.
     """
     for command in iter_command_strings(value):
-        match = _find_env_access_in_command(command)
+        match = _find_env_access_in_command(command, cwd)
         if match:
             return match
 

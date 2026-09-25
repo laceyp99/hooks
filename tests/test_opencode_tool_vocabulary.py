@@ -176,10 +176,10 @@ def test_main_denies_opencode_bash_reading_env_file(pre_tool_security, monkeypat
     assert target in message["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_main_allows_opencode_bash_git_commit_mentioning_env_file(
+def test_main_blocks_opencode_bash_git_commit_mentioning_protected_file(
     pre_tool_security, monkeypatch
 ) -> None:
-    """Known past regression: a commit message naming .env must not be denied."""
+    """Protected path mentions are denied consistently across harnesses."""
     target = _dot("env")
     payload = {
         "tool_name": "bash",
@@ -189,7 +189,9 @@ def test_main_allows_opencode_bash_git_commit_mentioning_env_file(
     exit_code, output = _run_main(pre_tool_security, monkeypatch, json.dumps(payload))
 
     assert exit_code == 0
-    assert output == ""
+    message = json.loads(output)
+    assert message["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert target in message["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_main_denies_opencode_bash_rm_rf_root(pre_tool_dangerous_commands, monkeypatch) -> None:

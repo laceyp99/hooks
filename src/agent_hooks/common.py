@@ -18,6 +18,10 @@ FILE_TARGET_FIELD_NAMES = frozenset(
         "file_path",
         "filepath",
         "filename",
+        "local_file",
+        "localfile",
+        "local_path",
+        "localpath",
         "new_path",
         "notebook_path",
         "old_path",
@@ -28,6 +32,8 @@ FILE_TARGET_FIELD_NAMES = frozenset(
         "src",
         "target",
         "target_path",
+        "upload_path",
+        "uploadfile",
     }
 )
 

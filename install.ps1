@@ -355,7 +355,8 @@ function Remove-HookEntries {
     return , $emptied
 }
 
-# Merges hook containers shaped like { "hooks": { "<Event>": [ { "matcher": ..., "hooks": [...] } ] } }.
+# Merges hook containers and any permission rules declared by the template. Hook containers are
+# shaped like { "hooks": { "<Event>": [ { "matcher": ..., "hooks": [...] } ] } }.
 # Both Codex (%USERPROFILE%\.codex\hooks.json) and Claude Code (%USERPROFILE%\.claude\settings.json)
 # use this layout.
 #
@@ -447,6 +448,32 @@ function Merge-ContainerConfig {
         }
 
         $Existing.hooks.$eventName = $existingContainers
+    }
+
+    if ((Get-PropertyNames -Object $Template) -contains "permissions") {
+        if (-not ((Get-PropertyNames -Object $Existing) -contains "permissions")) {
+            $Existing | Add-Member -NotePropertyName "permissions" -NotePropertyValue ([pscustomobject]@{})
+        } elseif ($null -eq $Existing.permissions) {
+            $Existing.permissions = [pscustomobject]@{}
+        }
+
+        foreach ($permissionName in (Get-PropertyNames -Object $Template.permissions)) {
+            if (-not ((Get-PropertyNames -Object $Existing.permissions) -contains $permissionName)) {
+                $Existing.permissions | Add-Member -NotePropertyName $permissionName -NotePropertyValue @()
+            }
+
+            $existingRules = @($Existing.permissions.$permissionName)
+            foreach ($rule in @($Template.permissions.$permissionName)) {
+                if ($existingRules -contains $rule) {
+                    continue
+                }
+
+                $existingRules += $rule
+                $changed = $true
+                Write-Host "Added $Name permission deny rule $rule"
+            }
+            $Existing.permissions.$permissionName = $existingRules
+        }
     }
 
     return $changed
@@ -637,8 +664,8 @@ $openCodeConfigRoot = if ([string]::IsNullOrEmpty($env:XDG_CONFIG_HOME)) {
 }
 $openCodePluginPath = Join-Path $openCodeConfigRoot "opencode\plugins\agent-hooks.ts"
 
-# Claude Code reads hooks from its user settings file. Only the "hooks" key is managed here;
-# every other setting in an existing settings.json is preserved.
+# Claude Code reads hooks and permission rules from its user settings file. The installer merges
+# the protected-path deny rules while preserving the user's existing permissions and settings.
 Install-Config `
     -Name "Claude Code" `
     -TemplatePath (Join-Path $RepoRoot ".claude\settings.example.json") `

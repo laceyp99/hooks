@@ -144,14 +144,8 @@ def test_main_blocks_env_like_paths(pre_tool_security, monkeypatch) -> None:
     assert blocked in message["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_main_allows_a_protected_name_a_shell_command_only_mentions(
-    pre_tool_security, monkeypatch
-) -> None:
-    """A commit message, a PR body, or a grep pattern carries the name as text.
-
-    The git rule has always required a mutation verb before denying. Without the same gate here,
-    writing about a secret file was as blocked as reading one.
-    """
+def test_main_blocks_protected_names_anywhere_in_shell_text(pre_tool_security, monkeypatch) -> None:
+    """The shell guard blocks even when the protected name is used as data."""
     target = _dot("env")
     mentions = [
         f'git commit -m "fix {target} loading"',
@@ -165,7 +159,9 @@ def test_main_allows_a_protected_name_a_shell_command_only_mentions(
         exit_code, output = _run_main(pre_tool_security, monkeypatch, json.dumps(payload))
 
         assert exit_code == 0
-        assert output == "", command
+        message = json.loads(output)
+        assert message["hookSpecificOutput"]["permissionDecision"] == "deny", command
+        assert target in message["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_main_still_blocks_shell_commands_that_touch_the_file(
