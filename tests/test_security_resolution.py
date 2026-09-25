@@ -574,3 +574,53 @@ def test_interpreter_concatenated_name_is_denied() -> None:
 @pytest.mark.xfail(strict=True, reason="bulk staging never names the file; needs repo state")
 def test_bulk_staging_is_denied(command: str) -> None:
     assert security._find_env_access_in_command(command) is not None
+
+
+# ---------------------------------------------------------------------------
+# A session whose own working directory sits inside a protected directory. The ancestor rules
+# judge the target, so they must not fire on the part of the path the session simply lives in.
+# ---------------------------------------------------------------------------
+
+
+def test_ordinary_file_is_allowed_when_cwd_is_inside_direnv(project, monkeypatch) -> None:
+    workdir = project / _dot("direnv") / "proj"
+    workdir.mkdir()
+    (workdir / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+    payload = _call("Read", {"file_path": "app.py"}, workdir)
+
+    assert _decide(payload, monkeypatch) is None
+
+
+def test_ordinary_file_is_allowed_when_cwd_is_inside_git(project, monkeypatch) -> None:
+    workdir = project / GIT / "hooks"
+    (workdir / "notes.md").write_text("x\n", encoding="utf-8")
+
+    payload = _call("Write", {"file_path": "notes.md"}, workdir)
+
+    assert _decide(payload, monkeypatch) is None
+
+
+def test_secret_is_still_denied_when_cwd_is_inside_direnv(project, monkeypatch) -> None:
+    workdir = project / _dot("direnv") / "proj"
+    workdir.mkdir()
+    (workdir / ENV).write_text("TOKEN=1\n", encoding="utf-8")
+
+    payload = _call("Read", {"file_path": ENV}, workdir)
+
+    assert _decide(payload, monkeypatch) == "deny"
+
+
+def test_target_outside_cwd_still_sees_its_protected_ancestor(project, monkeypatch) -> None:
+    workdir = project / "src"
+    target = project / _dot("direnv") / "cache"
+
+    payload = _call("Read", {"file_path": str(target)}, workdir)
+
+    assert _decide(payload, monkeypatch) == "deny"
+
+
+def test_git_internals_under_cwd_are_still_denied(project, monkeypatch) -> None:
+    payload = _call("Write", {"file_path": f"{GIT}/config"}, project)
+
+    assert _decide(payload, monkeypatch) == "deny"

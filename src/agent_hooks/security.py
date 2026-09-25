@@ -466,6 +466,31 @@ def _resolve_target(value: str, cwd: str | None) -> str | None:
     return os.path.normcase(_strip_extended_prefix(resolved))
 
 
+def _path_for_matching(resolved: str, cwd: str | None) -> str:
+    """Return the part of ``resolved`` the name rules should judge.
+
+    The ancestor rules ask whether a *target* sits in a protected directory, so they have to be
+    applied to the path the tool reached for, not to the session's location. A session whose
+    working directory is itself inside ``.direnv`` or ``.git`` would otherwise deny every
+    relative path in it, including ordinary source files. Anything under the working directory is
+    therefore judged by the part below it; anything outside is judged whole.
+    """
+    base = _base_directory(cwd)
+    if not base:
+        return resolved
+
+    try:
+        base_resolved = os.path.normcase(os.path.realpath(base))
+        relative = os.path.relpath(resolved, base_resolved)
+    except (OSError, ValueError):
+        return resolved
+
+    if relative.startswith(os.pardir) or os.path.isabs(relative):
+        return resolved
+
+    return relative
+
+
 def _find_hard_link_twin(resolved: str, cwd: str | None) -> str | None:
     """Return a protected-named file that ``resolved`` is a hard link to, if one is nearby.
 
@@ -518,7 +543,7 @@ def _find_resolved_env_target(value: str, cwd: str | None) -> str | None:
     if resolved is None:
         return None
 
-    if _matches_env_path(resolved):
+    if _matches_env_path(_path_for_matching(resolved, cwd)):
         return f"{value} (resolves to {resolved})"
 
     twin = _find_hard_link_twin(resolved, cwd)
@@ -531,7 +556,7 @@ def _find_resolved_env_target(value: str, cwd: str | None) -> str | None:
 def _find_resolved_git_target(value: str, cwd: str | None) -> str | None:
     """Return a deny target when ``value`` resolves inside a ``.git`` directory."""
     resolved = _resolve_target(value, cwd)
-    if resolved is not None and _matches_protected_git_path(resolved):
+    if resolved is not None and _matches_protected_git_path(_path_for_matching(resolved, cwd)):
         return f"{value} (resolves to {resolved})"
     return None
 

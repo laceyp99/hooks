@@ -105,14 +105,12 @@ def test_malformed_pyproject_falls_back_to_markers(tmp_path) -> None:
 def test_venv_paths_use_windows_layout(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(ruff_support.sys, "platform", "win32")
 
-    assert ruff_support._venv_python_path(tmp_path) == tmp_path / "Scripts" / "python.exe"
     assert ruff_support._venv_ruff_path(tmp_path) == tmp_path / "Scripts" / "ruff.exe"
 
 
 def test_venv_paths_use_posix_layout(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(ruff_support.sys, "platform", "linux")
 
-    assert ruff_support._venv_python_path(tmp_path) == tmp_path / "bin" / "python"
     assert ruff_support._venv_ruff_path(tmp_path) == tmp_path / "bin" / "ruff"
 
 
@@ -138,12 +136,20 @@ def test_ruff_command_skips_a_virtualenv_without_ruff(monkeypatch, tmp_path) -> 
     assert ruff_support.ruff_command(tmp_path) == [str(fallback)]
 
 
-def test_ruff_command_runs_the_venv_module_when_it_has_no_script(monkeypatch, tmp_path) -> None:
+def test_ruff_command_never_launches_the_project_interpreter(monkeypatch, tmp_path) -> None:
+    # Ruff installed in the project but without its executable. Running it as
+    # ``<project>/.venv/python -m ruff`` would execute that environment's sitecustomize and .pth
+    # files, so the environment is skipped and the hook's own Ruff runs instead.
     monkeypatch.setattr(ruff_support.sys, "platform", "win32")
+    monkeypatch.setattr(ruff_support.sys, "executable", "C:/Python/python.exe")
+    monkeypatch.setattr(ruff_support.importlib.util, "find_spec", lambda name: object())
     venv_python = _touch(tmp_path / ".venv" / "Scripts" / "python.exe")
     (tmp_path / ".venv" / "Lib" / "site-packages" / "ruff").mkdir(parents=True)
 
-    assert ruff_support.ruff_command(tmp_path) == [str(venv_python), "-m", "ruff"]
+    command = ruff_support.ruff_command(tmp_path)
+
+    assert command == ["C:/Python/python.exe", "-m", "ruff"]
+    assert str(venv_python) not in command
 
 
 def test_ruff_command_falls_back_to_the_current_interpreter(monkeypatch, tmp_path) -> None:

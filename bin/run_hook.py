@@ -5,8 +5,9 @@ Usage: ``python run_hook.py {pre-tool|post-tool|stop}`` with the hook payload on
 This is the one runner every harness calls. The installer copies it to
 ``%USERPROFILE%\\.claude\\hooks`` and ``%USERPROFILE%\\.codex\\hooks``; the Pi and OpenCode
 bridges run it from the checkout's ``bin`` directory. It never executes the project's own
-interpreter: the guards must not run under a Python the repository being guarded controls.
-Only the Ruff hooks reach into the project, and only to launch Ruff as a subprocess.
+interpreter: the guards must not run under a Python the repository being guarded controls. The
+one thing taken from the project is the Ruff executable the post-tool and stop hooks launch, so
+that a project's pinned Ruff checks it; see ``ruff_support.ruff_command``.
 
 This file must stay importable by old interpreters, since its job on Python < 3.10 is to hand
 off to a newer one, so keep 3.10-only syntax out of it.

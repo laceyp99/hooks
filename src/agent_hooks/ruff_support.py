@@ -164,41 +164,33 @@ def _venv_bin_dir(venv_dir: Path) -> Path:
     return venv_dir / ("Scripts" if sys.platform == "win32" else "bin")
 
 
-def _venv_python_path(venv_dir: Path) -> Path:
-    return _venv_bin_dir(venv_dir) / ("python.exe" if sys.platform == "win32" else "python")
-
-
 def _venv_ruff_path(venv_dir: Path) -> Path:
     return _venv_bin_dir(venv_dir) / ("ruff.exe" if sys.platform == "win32" else "ruff")
-
-
-def _venv_has_ruff_package(venv_dir: Path) -> bool:
-    patterns = ("Lib/site-packages/ruff", "lib/python*/site-packages/ruff")
-    return any(match.is_dir() for pattern in patterns for match in venv_dir.glob(pattern))
 
 
 def ruff_command(root: Path) -> list[str]:
     """Return the command prefix that runs the Ruff the project at ``root`` expects.
 
-    Ruff is always launched as a subprocess. The hook logic itself runs in the interpreter the
-    harness started, never in the project's, so a repository cannot use its own environment
-    (``sitecustomize``, ``.pth`` files) to run code inside the guards. Only the Ruff binary is
-    taken from the project, because the project pins the version its config is written for.
+    Ruff is always launched as a subprocess, and the hook logic itself runs in the interpreter
+    the harness started, so a repository cannot use its own environment to run code inside the
+    guards.
 
-    Order: the first project virtual environment's ``ruff`` executable, then ``python -m ruff``
-    through that environment when Ruff is installed there without a script, then Ruff in the
-    current interpreter, then ``ruff`` on ``PATH``. With none of these, ``python -m ruff`` in
-    the current interpreter still runs so the missing-module error reaches the hook output.
+    **One thing is still taken from the project: the Ruff executable**, because the project pins
+    the version its config is written for. A repository with a virtual environment therefore
+    supplies the binary these two hooks run, after an edit to a Python file or at session end,
+    in repos that opt in to Ruff. The project's *interpreter* is deliberately never launched:
+    running ``<project>/.venv/python -m ruff`` would execute that environment's
+    ``sitecustomize`` and ``.pth`` files, which is exactly what the hooks avoid elsewhere. A
+    virtual environment holding Ruff without its executable is skipped for that reason.
+
+    Order: the first project virtual environment's ``ruff`` executable, then Ruff in the current
+    interpreter, then ``ruff`` on ``PATH``. With none of these, ``python -m ruff`` in the
+    current interpreter still runs so the missing-module error reaches the hook output.
     """
     for dirname in VENV_DIR_NAMES:
-        venv_dir = root / dirname
-        venv_ruff = _venv_ruff_path(venv_dir)
+        venv_ruff = _venv_ruff_path(root / dirname)
         if venv_ruff.is_file():
             return [str(venv_ruff)]
-
-        venv_python = _venv_python_path(venv_dir)
-        if venv_python.is_file() and _venv_has_ruff_package(venv_dir):
-            return [str(venv_python), "-m", "ruff"]
 
     if importlib.util.find_spec("ruff") is not None:
         return [sys.executable, "-m", "ruff"]

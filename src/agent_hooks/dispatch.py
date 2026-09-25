@@ -1,4 +1,8 @@
-"""Single entry point for every hook event: ``run_hook.py <event>`` or ``python -m agent_hooks``.
+"""Single entry point for every hook event: ``run_hook.py <event>``.
+
+``python -m agent_hooks <event>`` runs the same dispatcher, but only where this package is
+already importable: installed, or with ``src`` on ``PYTHONPATH``. The runner needs no such setup,
+which is why every harness calls it instead.
 
 Each harness launches one process per event. The payload is read from stdin once, the event's
 rules run in this process, and at most one JSON response is written to stdout. An empty stdout
