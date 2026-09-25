@@ -50,13 +50,12 @@ Run this from Git Bash, or from PowerShell with the equivalent quoting:
 
 ```bash
 runner="$HOME/.claude/hooks/run_hook.py"
-security="$HOME/.claude/hooks/scripts/pre_tool_security.py"
 
 # Expect a JSON deny payload:
-echo '{"tool_name":"Bash","tool_input":{"command":"cat .env"}}' | python "$runner" "$security"
+echo '{"tool_name":"Bash","tool_input":{"command":"cat .env"}}' | python "$runner" pre-tool
 
 # Expect no output at all, because this only mentions the file:
-echo '{"tool_name":"Bash","tool_input":{"command":"git commit -m \"document .env\""}}' | python "$runner" "$security"
+echo '{"tool_name":"Bash","tool_input":{"command":"git commit -m \"document .env\""}}' | python "$runner" pre-tool
 ```
 
 The first prints a `permissionDecision: deny` payload naming `.env`. The second prints nothing, which means allowed. If both print nothing, the hooks are not wired up — see [Troubleshooting](#troubleshooting).
@@ -71,7 +70,8 @@ Access to secret-bearing files is denied: `.env`, `.env.local`, `.env.production
 
 How the check applies depends on how the tool names its target:
 
-- **Tools with a file field** (`Read`, `Edit`, `Write`, `NotebookEdit`, `apply_patch`) are denied on the **name alone**.
+- **Tools with a file field** (`Read`, `Edit`, `Write`, `NotebookEdit`, `apply_patch`, and MCP tools) are denied on the name, and on the **path it resolves to**. Relative paths are resolved against the session's working directory, then through symlinks, NTFS junctions, 8.3 short names, and `\\?\` prefixes; alternate data streams (`.env::$DATA`) count as the file itself; and a hard link to a protected file in the same directory or the working directory is caught too.
+- **`Grep`** returns file contents, so it is denied when its `path` targets a protected file or its `glob` (OpenCode: `include`) would select one, such as `**/.env*`. The search `pattern` is never checked, so searching *for* the text `.env` is fine.
 - **Shell commands** are denied only when the command actually **reads or writes** the file. A command that merely mentions the name is allowed, so these all work normally:
 
   ```bash
@@ -134,26 +134,33 @@ A repo opts in via any of:
 
 | Event | Tools matched |
 |---|---|
-| PreToolUse | `Bash`, `PowerShell`, `Edit`, `MultiEdit`, `Write`, `NotebookEdit`, `Read` |
+| PreToolUse | `Bash`, `PowerShell`, `Edit`, `MultiEdit`, `Write`, `NotebookEdit`, `Read`, `Grep`, `mcp__*` |
 | PostToolUse | `Edit`, `MultiEdit`, `Write`, `NotebookEdit` |
 | Stop | every stop |
 
-Those are Claude Code's tool names. Every harness is matched against the same sets, case-insensitively, so OpenCode's lowercase `bash`, `edit`, `write`, `read`, and `apply_patch` land on the same rules; `glob` and `grep` touch no files and are not checked. Argument field names are matched the same way, which is why OpenCode's camelCase `filePath` is recognized alongside Claude Code's `file_path`. `apply_patch` sends its patch in `patchText`; the patch is recognized by its opening `*** Begin Patch` marker rather than by the field name, so only its file headers are inspected, as with Codex.
+Those are Claude Code's tool names. Every harness is matched against the same sets, case-insensitively, so OpenCode's lowercase `bash`, `edit`, `write`, `read`, and `apply_patch` land on the same rules; `glob` returns only paths and is not checked. Argument field names are matched the same way, which is why OpenCode's camelCase `filePath` is recognized alongside Claude Code's `file_path`. `apply_patch` sends its patch in `patchText`; the patch is recognized by its opening `*** Begin Patch` marker rather than by the field name, so only its file headers are inspected, as with Codex.
 
 ### Interpreter selection
 
-Each hook launch goes through a bootstrapper that picks a Python in a predictable order: the project virtual environment first, then the current interpreter, with a Windows fallback to `py -3.10` if the active interpreter is too old.
+Each harness event is one command, `run_hook.py pre-tool | post-tool | stop`, and one Python process. `pre-tool` reads the payload once and runs the secret-file, Git-internals, and dangerous-command rules together, returning at most one decision.
+
+The hooks run in the Python the harness launched, never in the project's virtual environment, so a repository cannot swap in the interpreter that checks it. The only re-exec is a Windows fallback to `py -3.10` when the launching Python is too old.
+
+One thing is still taken from the project: **the Ruff executable**, because a project pins the version its config is written for. The two Ruff hooks look for `ruff` in `.venv`, `venv`, or `env`, then fall back to the current interpreter and `PATH`, and always run it as a separate process. So a repository you have opted in to Ruff supplies a binary that runs after an edit to a Python file and at session end. The project's *interpreter* is never launched: `<project>/.venv/python -m ruff` would execute that environment's `sitecustomize` and `.pth` files, so an environment holding Ruff without its executable is skipped instead.
 
 ## Known limits
 
 Worth knowing before you rely on these:
 
 - **Commands hidden inside interpreter arguments are not parsed.** `python -c "import shutil; shutil.rmtree('.git')"` and `bash -c "rm -rf /"` are **not** caught by the dangerous-command rules. Tracked in [issue #2](https://github.com/laceyp99/hooks/issues/2). Secret-file and Git-internals rules *do* apply to interpreters, but bluntly: they match anywhere in the command, so `bash -c "echo .env"` is denied even though it is harmless.
+- **Paths built at run time are not seen.** `cat "$(printf '.%s' env)"` and `python -c "open('.e' + 'nv')"` never spell the name out, so no command-text check can catch them. These cases are recorded as expected failures in `tests/test_security_resolution.py`; the reliable fix is keeping the file where the agent's OS account cannot read it.
+- **Hard-link detection is local.** A hard link to a secret is caught only when the secret sits in the same directory as the link or in the working directory.
+- **A broad search glob is allowed even when a secret is under it.** `Grep` is denied for a glob aimed at a secret, such as `**/.env*` or `*.env`, but a glob that also selects ordinary files is treated as a broad search and allowed. `config/*` therefore passes even though `config/.env` is among the files it selects. Naming the file, in `path` or in the glob itself, is what the rule catches.
 - **Bulk staging is not covered.** `git add .`, `git add -A`, and `git commit -a` will happily stage a secret file, because the command never names it. The guard cannot see this without consulting repository state. **Put the file in `.gitignore`** — that is the reliable fix, and a project-level `pre-commit` hook is the right place to enforce it for repos that need it.
 - **The shell-command check uses a list of access verbs.** An unusual reader not on that list will pass. Tools that name a file in a dedicated field have no such gap.
 - **A secret committed once stays in history.** Deleting it in a later commit does not remove it from earlier commits. If it was pushed, rotate the secret; cleaning history needs a rewrite.
 - **OpenCode cannot block at the end of a session.** Its only session-completion signal is the `session.idle` event, which fires after every turn the agent finishes and has no way to refuse. The Ruff sweep therefore *reports* on OpenCode where Claude Code's `Stop` hook would block, so `AGENT_HOOKS_STOP_FIX` still governs whether files are rewritten but a finding never holds the session open.
-- **These are guardrails, not a security boundary.** They exist to stop an agent's honest mistakes, not to withstand a determined adversary.
+- **These are guardrails, not a security boundary.** They exist to stop an agent's honest mistakes and give it fast feedback, not to withstand a determined adversary. To actually keep a secret from an agent, keep the file outside its workspace or deny its account access with an ACL, and add harness deny rules such as Claude Code's `permissions.deny`.
 
 ## Updating
 
@@ -171,6 +178,33 @@ Two things to know:
 
 - The installer **reconciles managed hook entries** with the template, so a corrected command or matcher reaches an existing install. If you hand-edited a managed hook's command, that edit is overwritten. Your own unmanaged hooks are never touched, and a backup is written first.
 - **Codex re-trust.** Any change to a hook command invalidates Codex's trust hash, so re-approve the hooks in the Codex TUI after an update. Until you do, Codex skips them silently.
+
+### Updating from a per-script install
+
+Installs made before the single runner registered one hook per script: `pre_tool_security.py` and `pre_tool_dangerous_commands.py` for PreToolUse, and a script path for each of the other events. The installer migrates those to one entry per event, so there is nothing to edit by hand. It helps to know exactly what it changes.
+
+**What it rewrites**
+
+- The two PreToolUse entries collapse into one `run_hook.py pre-tool`, and the post-tool and stop entries are rewritten to `post-tool` and `stop`. A container left empty by the collapse is removed.
+- The PreToolUse matcher becomes `Bash|PowerShell|Edit|MultiEdit|Write|NotebookEdit|Read|Grep|mcp__.*`. **The matcher belongs to the container**, so one of your own hooks sharing that container starts firing on `Grep` and MCP tools too. Move it to its own container first if you do not want that.
+- Any entry whose command mentions `run_hook.py` counts as managed, and its command, timeout, and status message are reset to the template's. A hand-tuned timeout does not survive.
+- `settings.json` is rewritten whole, so indentation is normalized and non-ASCII characters come back as `\uXXXX` escapes. Only the `hooks` key changes in substance; the file is written as UTF-8 with no byte order mark.
+
+**What it deletes**
+
+- The five per-script files and their `.pyc` files under each harness's `hooks\scripts`, and `bootstrap.py` from `%USERPROFILE%\src\agent_hooks`. A directory holding anything else keeps that file and stays.
+
+**Before and after**
+
+Every write is backed up to a timestamped `.bak-*` beside the original, so comparing the two is the check that matters:
+
+```powershell
+$settings = "$env:USERPROFILE\.claude\settings.json"
+$backup = Get-ChildItem "$settings.bak-*" | Sort-Object LastWriteTime | Select-Object -Last 1
+git diff --no-index $backup.FullName $settings
+```
+
+Then confirm the hooks still fire, with the [verification snippets](#5-verify-it-works). Restoring is a copy: `Copy-Item $backup.FullName $settings -Force`.
 
 ## Configuration
 
@@ -198,15 +232,15 @@ These apply to the two TypeScript bridges, **Pi** and **OpenCode**.
 
 Unlike Claude Code and Codex, these two install only a TypeScript bridge; it calls back into this source checkout to run the Python hooks. Keep the checkout in place.
 
-The OpenCode plugin is a single auto-loaded file, so installing it is the whole registration step. It runs the same four scripts, mapped onto OpenCode's own hooks:
+The OpenCode plugin is a single auto-loaded file, so installing it is the whole registration step. It runs the same three hook events, mapped onto OpenCode's own hooks:
 
-| OpenCode hook | Scripts | Notes |
+| OpenCode hook | Event | Notes |
 |---|---|---|
-| `tool.execute.before` | `pre_tool_security.py`, `pre_tool_dangerous_commands.py` | Denies by throwing; the reason reaches the model as the failed tool call |
-| `tool.execute.after` | `post_tool_cleaner.py` | Appends any Ruff summary to the tool's output |
-| `event` (`session.idle`) | `session_stop.py` | Reports only, one sweep at a time; see [Known limits](#known-limits) |
+| `tool.execute.before` | `pre-tool` | Denies by throwing; the reason reaches the model as the failed tool call |
+| `tool.execute.after` | `post-tool` | Appends any Ruff summary to the tool's output |
+| `event` (`session.idle`) | `stop` | Reports only, one sweep at a time; see [Known limits](#known-limits) |
 
-The plugin skips the guards for OpenCode built-ins that neither name a file nor run a command, such as `glob`, `grep`, `todowrite`, and `webfetch`, and runs the cleaner only for tools that write. Each hook costs a couple of Python startups, so this keeps read-only tool calls fast. Any tool it does not recognize, including MCP tools, still goes through the guards.
+The plugin skips the guards for OpenCode built-ins that neither name a file nor run a command, such as `glob`, `todowrite`, and `webfetch`, and runs the cleaner only for tools that write. Each hook costs a Python startup, so this keeps inert tool calls fast. `grep` is not skipped: it returns file contents, so it goes through the guards. Any tool it does not recognize, including MCP tools, still goes through the guards.
 
 The checked-in plugin is `.opencode/agent-hooks.example.ts`, deliberately outside `.opencode/plugins/`. OpenCode scans that directory in whatever project it runs in, so a copy there would load a second time whenever OpenCode runs inside this repo.
 
@@ -218,12 +252,11 @@ Use this only if `install.ps1` will not run. It does the same thing by hand, but
 <summary>Claude Code</summary>
 
 ```powershell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\hooks\scripts" | Out-Null
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\hooks" | Out-Null
 if (-not (Test-Path "$env:USERPROFILE\.claude\settings.json")) {
   Copy-Item ".claude\settings.example.json" "$env:USERPROFILE\.claude\settings.json"
 }
-Copy-Item -Force ".claude\hooks\run_hook.py" "$env:USERPROFILE\.claude\hooks\run_hook.py"
-Copy-Item -Recurse -Force ".claude\hooks\scripts\*" "$env:USERPROFILE\.claude\hooks\scripts"
+Copy-Item -Force "bin\run_hook.py" "$env:USERPROFILE\.claude\hooks\run_hook.py"
 Copy-Item -Recurse -Force "src" "$env:USERPROFILE\"
 ```
 
@@ -234,12 +267,11 @@ If you already have a `settings.json`, do **not** overwrite it — copy the `hoo
 <summary>Codex</summary>
 
 ```powershell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\.codex\hooks\scripts" | Out-Null
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.codex\hooks" | Out-Null
 if (-not (Test-Path "$env:USERPROFILE\.codex\hooks.json")) {
   Copy-Item ".codex\hooks.example.json" "$env:USERPROFILE\.codex\hooks.json"
 }
-Copy-Item -Force ".codex\hooks\run_hook.py" "$env:USERPROFILE\.codex\hooks\run_hook.py"
-Copy-Item -Recurse -Force ".codex\hooks\scripts\*" "$env:USERPROFILE\.codex\hooks\scripts"
+Copy-Item -Force "bin\run_hook.py" "$env:USERPROFILE\.codex\hooks\run_hook.py"
 Copy-Item -Recurse -Force "src" "$env:USERPROFILE\"
 ```
 
@@ -274,17 +306,16 @@ That is the whole registration: OpenCode loads every file in the plugin director
 ### The hooks never fire
 
 1. **Codex:** almost always the trust prompt. Open the TUI and approve the hooks. There is no warning when Codex skips an untrusted hook.
-2. **Claude Code:** confirm the `hooks` key exists in `%USERPROFILE%\.claude\settings.json` and that `%USERPROFILE%\.claude\hooks\run_hook.py` is present. Start with `claude --debug` and look for "Hook script not found" or a spawn failure.
+2. **Claude Code:** confirm the `hooks` key exists in `%USERPROFILE%\.claude\settings.json` and that `%USERPROFILE%\.claude\hooks\run_hook.py` is present. Start with `claude --debug` and look for "agent_hooks package not found" or a spawn failure.
 3. Confirm `python --version` reports 3.10 or newer *in the shell the agent uses*, which may not be the shell you tested in.
 4. Run the [verification snippets](#5-verify-it-works). If they deny correctly, the hooks work and the problem is registration, not logic.
 
-### "Hook script not found"
+### "agent_hooks package not found"
 
-The installed bundle is incomplete. Re-run `.\install.ps1` and answer `y` to the "Refresh managed runtime files" prompts. All four of these must exist:
+The installed bundle is incomplete. Re-run `.\install.ps1` and answer `y` to the "Refresh managed runtime files" prompts. All three of these must exist:
 
 ```powershell
 Test-Path "$env:USERPROFILE\.claude\hooks\run_hook.py"
-Test-Path "$env:USERPROFILE\.claude\hooks\scripts\pre_tool_security.py"
 Test-Path "$env:USERPROFILE\.codex\hooks\run_hook.py"
 Test-Path "$env:USERPROFILE\src\agent_hooks\common.py"
 ```

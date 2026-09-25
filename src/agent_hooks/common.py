@@ -102,6 +102,18 @@ def load_stdin_payload() -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def emit_response(response: dict[str, Any] | None) -> None:
+    """Write a hook response to stdout as one JSON line. None means allow and prints nothing.
+
+    Every harness and bridge reads the decision from stdout, and an empty stdout means allow, so
+    a hook that has nothing to say must stay silent.
+    """
+    if response is None:
+        return
+    json.dump(response, sys.stdout)
+    sys.stdout.write("\n")
+
+
 def normalize_tool_name(tool_name: str) -> tuple[str, str]:
     name = tool_name.lower()
     return name, name.rsplit(".", 1)[-1]

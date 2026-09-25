@@ -1,1 +1,1 @@
-"""Shared hook logic for the Claude Code, Codex, and Pi hook bundles."""
+"""Shared hook logic for the Claude Code, Codex, Pi, and OpenCode hook bundles."""

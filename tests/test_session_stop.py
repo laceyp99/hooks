@@ -1,21 +1,29 @@
 import io
 import json
 import subprocess
+import sys
 
 import pytest
 
 
+# The Ruff launcher is resolved per project by ruff_command; pin it so the expected command
+# lines do not depend on this machine's environment.
+RUFF = ["ruff"]
+
+
 def _ruff(stop_hook, *args: str) -> list[str]:
-    return [stop_hook.sys.executable, "-m", "ruff", *args]
+    return [*RUFF, *args]
 
 
 @pytest.fixture
-def stop_hook(load_script_module, monkeypatch, tmp_path):
-    module = load_script_module("scripts/session_stop.py", "session_stop_under_test")
+def stop_hook(monkeypatch, tmp_path):
+    from agent_hooks import session_stop as module
+
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(module.sys, "stdin", io.StringIO("{}"))
+    monkeypatch.setattr(sys, "stdin", io.StringIO("{}"))
     monkeypatch.delenv(module.STOP_FIX_ENV_VAR, raising=False)
     monkeypatch.setattr(module, "repo_uses_ruff", lambda root: True)
+    monkeypatch.setattr(module, "ruff_command", lambda root: list(RUFF))
     return module
 
 
@@ -174,7 +182,7 @@ def test_changed_python_files_parses_git_status(stop_hook, monkeypatch, tmp_path
             " M missing.py",
         ]
     )
-    monkeypatch.setattr(stop_hook._impl, "_run", _fake_git(tmp_path, porcelain))
+    monkeypatch.setattr(stop_hook, "_run", _fake_git(tmp_path, porcelain))
 
     assert stop_hook._changed_python_files(tmp_path) == [
         "kept.py",
@@ -184,7 +192,7 @@ def test_changed_python_files_parses_git_status(stop_hook, monkeypatch, tmp_path
 
 
 def test_changed_python_files_is_empty_outside_git(stop_hook, monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(stop_hook._impl, "_run", lambda command: (128, "", "fatal: not a git repo"))
+    monkeypatch.setattr(stop_hook, "_run", lambda command: (128, "", "fatal: not a git repo"))
 
     assert stop_hook._changed_python_files(tmp_path) == []
 
@@ -211,7 +219,7 @@ def test_changed_python_files_resolves_against_git_toplevel_from_subdirectory(
     (package / "sub" / "inside.py").write_text("x = 1\n", encoding="utf-8")
     (tmp_path / "outside.py").write_text("x = 1\n", encoding="utf-8")
     porcelain = "\n".join([" M pkg/sub/inside.py", "?? outside.py"])
-    monkeypatch.setattr(stop_hook._impl, "_run", _fake_git(tmp_path, porcelain))
+    monkeypatch.setattr(stop_hook, "_run", _fake_git(tmp_path, porcelain))
 
     # Porcelain paths are relative to the repository top level, not to the hook's cwd.
     assert stop_hook._changed_python_files(package) == ["sub/inside.py"]
@@ -229,7 +237,7 @@ def test_changed_python_files_uses_real_git_from_subdirectory(stop_hook, tmp_pat
 
 
 def _set_payload(stop_hook, monkeypatch, payload: dict) -> None:
-    monkeypatch.setattr(stop_hook.sys, "stdin", io.StringIO(json.dumps(payload)))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
 
 
 def test_stop_hook_active_reports_without_blocking(stop_hook, monkeypatch, capsys) -> None:

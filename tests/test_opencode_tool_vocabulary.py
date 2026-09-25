@@ -12,6 +12,7 @@ cannot silently stop covering OpenCode without a failing test to say so.
 import io
 import json
 import re
+import sys
 from pathlib import Path
 
 
@@ -25,8 +26,8 @@ def _join_suffix(name: str, suffix: str) -> str:
 
 def _run_main(module, monkeypatch, payload_text: str):
     stdout = io.StringIO()
-    monkeypatch.setattr(module.sys, "stdin", io.StringIO(payload_text))
-    monkeypatch.setattr(module.sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(payload_text))
+    monkeypatch.setattr(sys, "stdout", stdout)
     exit_code = module.main()
     return exit_code, stdout.getvalue()
 
@@ -40,9 +41,9 @@ def test_security_recognizes_opencode_file_tools(pre_tool_security) -> None:
     for tool_name in ("bash", "edit", "write", "read"):
         assert pre_tool_security._should_check(tool_name) is True
 
-    # glob and grep only search; they never touch a file's contents directly.
+    # glob returns paths only. grep returns file contents, so its path and include are checked.
     assert pre_tool_security._should_check("glob") is False
-    assert pre_tool_security._should_check("grep") is False
+    assert pre_tool_security._should_check("grep") is True
 
 
 def test_security_treats_edit_and_write_as_mutating_but_not_bash_or_read(
@@ -63,11 +64,7 @@ def test_dangerous_commands_only_checks_opencode_bash(
         assert pre_tool_dangerous_commands._should_check(tool_name) is False
 
 
-def test_post_tool_cleaner_lints_opencode_edit_and_write(load_script_module) -> None:
-    cleaner = load_script_module(
-        "scripts/post_tool_cleaner.py", "post_tool_cleaner_opencode_should_lint"
-    )
-
+def test_post_tool_cleaner_lints_opencode_edit_and_write(cleaner) -> None:
     assert cleaner._should_lint("edit") is True
     assert cleaner._should_lint("write") is True
 
@@ -208,11 +205,14 @@ def test_main_denies_opencode_bash_rm_rf_root(pre_tool_dangerous_commands, monke
 def test_main_ignores_opencode_glob_and_grep_for_secret_patterns(
     pre_tool_security, monkeypatch
 ) -> None:
-    """glob/grep only search; naming a secret file in a pattern is not access to it."""
+    """Naming a secret file in a search pattern is not access to it.
+
+    grep's ``path`` is a real target and is checked; its regex ``pattern`` never is.
+    """
     target = _dot("env")
     payloads = [
         {"tool_name": "glob", "tool_input": {"pattern": f"**/{target}"}},
-        {"tool_name": "grep", "tool_input": {"pattern": target, "path": target}},
+        {"tool_name": "grep", "tool_input": {"pattern": target, "path": "src"}},
     ]
 
     for payload in payloads:
@@ -222,10 +222,7 @@ def test_main_ignores_opencode_glob_and_grep_for_secret_patterns(
         assert output == ""
 
 
-def test_opencode_write_of_python_file_is_linted(load_script_module, tmp_path) -> None:
-    cleaner = load_script_module(
-        "scripts/post_tool_cleaner.py", "post_tool_cleaner_opencode_collect"
-    )
+def test_opencode_write_of_python_file_is_linted(cleaner, tmp_path) -> None:
     target = tmp_path / "sample.py"
     target.write_text("print('x')\n", encoding="utf-8")
     seen: set = set()
@@ -245,11 +242,7 @@ def _patch_text(header: str, path: str) -> str:
     return f"*** Begin Patch\n*** {header} File: {path}\n+x = 1\n*** End Patch"
 
 
-def test_apply_patch_is_checked_and_linted(pre_tool_security, load_script_module) -> None:
-    cleaner = load_script_module(
-        "scripts/post_tool_cleaner.py", "post_tool_cleaner_opencode_apply_patch"
-    )
-
+def test_apply_patch_is_checked_and_linted(pre_tool_security, cleaner) -> None:
     assert pre_tool_security._should_check("apply_patch") is True
     assert pre_tool_security._should_check_git_paths("apply_patch") is True
     assert cleaner._should_lint("apply_patch") is True
@@ -288,7 +281,7 @@ def test_main_allows_opencode_apply_patch_of_ordinary_file(pre_tool_security, mo
 # the plugin source so the two sides cannot drift apart unnoticed.
 # ---------------------------------------------------------------------------
 
-PLUGIN_TEMPLATE = Path(__file__).resolve().parents[3] / ".opencode" / "agent-hooks.example.ts"
+PLUGIN_TEMPLATE = Path(__file__).resolve().parents[1] / ".opencode" / "agent-hooks.example.ts"
 
 
 def _plugin_string_list(declaration: str) -> set[str]:
@@ -311,7 +304,6 @@ def test_plugin_skip_list_never_skips_a_tool_the_guards_check(
 
 
 def test_plugin_write_markers_match_the_cleaner() -> None:
-    # The scripts/ wrapper does not re-export the marker tuple, so read the implementation.
     from agent_hooks import post_tool_cleaner
 
     assert _plugin_string_list("const WRITE_TOOL_MARKERS") == set(

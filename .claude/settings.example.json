@@ -2,16 +2,11 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|PowerShell|Edit|MultiEdit|Write|NotebookEdit|Read",
+        "matcher": "Bash|PowerShell|Edit|MultiEdit|Write|NotebookEdit|Read|Grep|mcp__.*",
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$HOME/.claude/hooks/run_hook.py\" \"$HOME/.claude/hooks/scripts/pre_tool_security.py\"",
-            "timeout": 30
-          },
-          {
-            "type": "command",
-            "command": "python \"$HOME/.claude/hooks/run_hook.py\" \"$HOME/.claude/hooks/scripts/pre_tool_dangerous_commands.py\"",
+            "command": "python \"$HOME/.claude/hooks/run_hook.py\" pre-tool",
             "timeout": 30
           }
         ]
@@ -23,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$HOME/.claude/hooks/run_hook.py\" \"$HOME/.claude/hooks/scripts/post_tool_cleaner.py\"",
+            "command": "python \"$HOME/.claude/hooks/run_hook.py\" post-tool",
             "timeout": 30
           }
         ]
@@ -34,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$HOME/.claude/hooks/run_hook.py\" \"$HOME/.claude/hooks/scripts/session_stop.py\"",
+            "command": "python \"$HOME/.claude/hooks/run_hook.py\" stop",
             "timeout": 120
           }
         ]

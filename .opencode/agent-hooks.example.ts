@@ -18,8 +18,10 @@ type HookResponse = {
 	hookSpecificOutput?: HookSpecificOutput;
 };
 
+// The events bin/run_hook.py dispatches on, one Python process per event.
+type HookEvent = "pre-tool" | "post-tool" | "stop";
+
 const DEFAULT_HOOKS_ROOT = join(homedir(), "code", "agent-hooks");
-const BUNDLE_DIRS = [".codex", ".claude"] as const;
 
 // OpenCode has no AbortSignal on its hooks, unlike Pi's ctx.signal. A wedged Python process
 // would otherwise hang the session forever, so each guard gets a hard timeout instead: short
@@ -28,18 +30,19 @@ const BUNDLE_DIRS = [".codex", ".claude"] as const;
 const GUARD_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 120_000;
 
-// Every hook launch costs two interpreter startups (run_hook.py re-execs the resolved Python),
-// a couple of hundred milliseconds on Windows. The Claude Code config avoids paying that on
-// every tool call with a matcher; these gates are this bridge's equivalent. They are only an
-// optimization: the Python side still decides everything for the calls that reach it.
+// Every hook launch costs one interpreter startup, around a hundred milliseconds on Windows.
+// The Claude Code config avoids paying that on every tool call with a matcher; these gates are
+// this bridge's equivalent. They are only an optimization: the Python side still decides
+// everything for the calls that reach it.
 //
 // The pre-tool gate is a skip list rather than an allow list on purpose. These are OpenCode
-// built-ins that neither touch a file by name nor run a command, so skipping them loses
-// nothing. Any tool not listed, including MCP and plugin tools and any built-in added later,
-// still goes to the guards, so a stale list costs latency rather than coverage.
+// built-ins that neither return file contents nor run a command, so skipping them loses
+// nothing. glob returns only paths. grep is deliberately absent: it returns the matching lines
+// of the files it searches, so it can read a secret file and has to reach the guards. Any tool
+// not listed, including MCP and plugin tools and any built-in added later, still goes to the
+// guards, so a stale list costs latency rather than coverage.
 const INERT_TOOLS = new Set([
 	"glob",
-	"grep",
 	"invalid",
 	"lsp",
 	"plan_exit",
@@ -81,20 +84,16 @@ function resolveHooksRoot(): string | undefined {
 	return existsSync(candidate) ? candidate : undefined;
 }
 
-function resolveBundlePath(relativePath: string): string | undefined {
+// The runner lives at bin/run_hook.py in the checkout. It runs every event in the interpreter
+// this bridge launches, never in a project virtualenv, and finds src/agent_hooks next to itself.
+function resolveRunnerPath(): string | undefined {
 	const root = resolveHooksRoot();
 	if (!root) {
 		return undefined;
 	}
 
-	for (const bundleDir of BUNDLE_DIRS) {
-		const candidate = join(root, bundleDir, "hooks", relativePath);
-		if (existsSync(candidate)) {
-			return candidate;
-		}
-	}
-
-	return undefined;
+	const candidate = join(root, "bin", "run_hook.py");
+	return existsSync(candidate) ? candidate : undefined;
 }
 
 function resolvePythonCommand(): [string, string[]] {
@@ -127,27 +126,26 @@ function parseHookResponse(stdout: string): HookResponse | undefined {
 }
 
 async function runHook(
-	scriptName: string,
+	event: HookEvent,
 	payload: Record<string, unknown>,
 	timeoutMs: number,
 	cwd: string,
 ): Promise<HookResponse | undefined> {
-	const runHookPath = resolveBundlePath("run_hook.py");
-	const scriptPath = resolveBundlePath(join("scripts", scriptName));
-	if (!runHookPath || !scriptPath) {
+	const runHookPath = resolveRunnerPath();
+	if (!runHookPath) {
 		return undefined;
 	}
 
 	const [command, extraArgs] = resolvePythonCommand();
 	let child: ChildProcessWithoutNullStreams;
 	try {
-		child = spawn(command, [...extraArgs, runHookPath, scriptPath], {
+		child = spawn(command, [...extraArgs, runHookPath, event], {
 			cwd,
 			env: { ...process.env },
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 	} catch (error) {
-		console.warn(`[agent-hooks] ${scriptName} could not start: ${String(error)}`);
+		console.warn(`[agent-hooks] ${event} could not start: ${String(error)}`);
 		return undefined;
 	}
 
@@ -193,14 +191,14 @@ async function runHook(
 	});
 
 	if (timedOut) {
-		console.warn(`[agent-hooks] ${scriptName} timed out after ${timeoutMs}ms; allowing the call.`);
+		console.warn(`[agent-hooks] ${event} timed out after ${timeoutMs}ms; allowing the call.`);
 		return undefined;
 	}
 
 	if (exitCode !== 0) {
 		const message = stderr.trim();
 		if (message) {
-			console.warn(`[agent-hooks] ${scriptName} failed: ${message}`);
+			console.warn(`[agent-hooks] ${event} failed: ${message}`);
 		}
 		return undefined;
 	}
@@ -226,8 +224,8 @@ function getReason(response: HookResponse | undefined): string | undefined {
 // plugin function and refuses to load the file if any export is not a function. Keep this the
 // only export.
 export const AgentHooks: Plugin = async ({ directory }) => {
-	// The guards are repo-aware: session_stop.py shells out to git and Ruff relative to the
-	// working directory, and post_tool_cleaner.py resolves edited paths against it. OpenCode
+	// The guards are repo-aware: the stop sweep shells out to git and Ruff relative to the
+	// working directory, and the post-tool cleaner resolves edited paths against it. OpenCode
 	// hands the plugin the project directory, which is what these need; the server's own
 	// process.cwd() is not guaranteed to be it. This is the counterpart of keeping "cwd": "."
 	// in the Claude Code and Codex hook entries.
@@ -256,14 +254,11 @@ export const AgentHooks: Plugin = async ({ directory }) => {
 				tool_input: output.args,
 			};
 
-			const [securityResponse, dangerousResponse] = await Promise.all([
-				runHook("pre_tool_security.py", payload, GUARD_TIMEOUT_MS, hookCwd),
-				runHook("pre_tool_dangerous_commands.py", payload, GUARD_TIMEOUT_MS, hookCwd),
-			]);
-
-			const blockedResponse = [securityResponse, dangerousResponse].find(isDenied);
-			if (blockedResponse) {
-				const reason = getReason(blockedResponse) ?? "Blocked by agent hooks.";
+			// One process runs both the secret-file/Git-internals rules and the dangerous-command
+			// rules, and reports at most one decision.
+			const response = await runHook("pre-tool", payload, GUARD_TIMEOUT_MS, hookCwd);
+			if (isDenied(response)) {
+				const reason = getReason(response) ?? "Blocked by agent hooks.";
 				// Throwing is the only way OpenCode lets a tool.execute.before hook block the
 				// call; the message surfaces to the model as the failed tool call.
 				throw new Error(reason);
@@ -280,7 +275,7 @@ export const AgentHooks: Plugin = async ({ directory }) => {
 				tool_input: input.args,
 			};
 
-			const response = await runHook("post_tool_cleaner.py", payload, GUARD_TIMEOUT_MS, hookCwd);
+			const response = await runHook("post-tool", payload, GUARD_TIMEOUT_MS, hookCwd);
 			const additionalContext = response?.hookSpecificOutput?.additionalContext?.trim();
 			if (additionalContext) {
 				output.output = typeof output.output === "string" ? output.output : "";
@@ -302,7 +297,7 @@ export const AgentHooks: Plugin = async ({ directory }) => {
 			stopSweepInFlight = true;
 			let response: HookResponse | undefined;
 			try {
-				response = await runHook("session_stop.py", {}, STOP_TIMEOUT_MS, hookCwd);
+				response = await runHook("stop", {}, STOP_TIMEOUT_MS, hookCwd);
 			} finally {
 				stopSweepInFlight = false;
 			}
