@@ -352,6 +352,45 @@ def test_powershell_encoded_launch_past_options_is_denied(pre_tool_security, com
 @pytest.mark.parametrize(
     "command",
     [
+        "echo $(powershell -enc SGVsbG8=)",
+        "(pwsh -e SGVsbG8=)",
+        "x=$(pwsh -e SGVsbG8=)",
+        "{ powershell.exe -enc SGVsbG8=; }",
+    ],
+)
+def test_powershell_encoded_launch_in_subshell_is_denied(pre_tool_security, command: str) -> None:
+    assert pre_tool_security._find_env_access_in_command(command) == "opaque dynamic command"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "powershell -ec SGVsbG8=",
+        "pwsh -EC SGVsbG8=",
+        "powershell /enc SGVsbG8=",
+        "powershell.exe /EncodedCommand SGVsbG8=",
+        "pwsh --encodedcommand SGVsbG8=",
+    ],
+)
+def test_powershell_encoded_flag_aliases_are_denied(pre_tool_security, command: str) -> None:
+    assert pre_tool_security._find_env_access_in_command(command) == "opaque dynamic command"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'powershell /c "rg -e TODO src"',
+        'pwsh --command "echo -e hello"',
+        "echo $(pip install -e .)",
+    ],
+)
+def test_powershell_alternate_script_flags_are_allowed(pre_tool_security, command: str) -> None:
+    assert pre_tool_security._find_env_access_in_command(command) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
         "cat .e*",
         "cat .??v",
         "cat [.]env",

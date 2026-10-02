@@ -189,16 +189,18 @@ PRINTF_FORMAT_RE = re.compile(
 ASSIGNMENT_RE = re.compile(r"(?i)(?:\$)?([a-z_][a-z0-9_]*)\s*=\s*([^;|&\r\n]+)")
 VARIABLE_RE = re.compile(r"\$\{?([a-z_][a-z0-9_]*)\}?", re.IGNORECASE)
 OPAQUE_COMMAND_RE = re.compile(r"(?i)(?:^|[\s;&|])(?:iex|invoke-expression|start-process)\b")
+# A launch can open a subshell or group, as in ``$(pwsh -e ...)`` or ``(pwsh -e ...)``.
 POWERSHELL_INVOCATION_RE = re.compile(
-    r"(?i)(?:^|[\s;&|])(?:[\"'](?:[^\"']*[\\/])?|[^\s;&|]*[\\/])?"
+    r"(?i)(?:^|[\s;&|({])(?:[\"'](?:[^\"']*[\\/])?|[^\s;&|(){}]*[\\/])?"
     r"(?:powershell|pwsh)(?:\.exe)?[\"']?(?=\s|$)"
 )
+# PowerShell takes ``-``, ``/`` and (pwsh) ``--`` option prefixes, and ``-ec`` as an alias.
 POWERSHELL_ENCODED_FLAG_RE = re.compile(
-    r"(?i)(?:^|\s)-(?:e|en|enc|enco|encod|encode|encoded|encodedc|encodedco|"
+    r"(?i)(?:^|\s)(?:--?|/)(?:e|ec|en|enc|enco|encod|encode|encoded|encodedc|encodedco|"
     r"encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)\b"
 )
 POWERSHELL_SCRIPT_FLAG_RE = re.compile(
-    r"(?i)(?:^|\s)-(?:c|co|com|comm|comma|comman|command|f|fi|fil|file)\b"
+    r"(?i)(?:^|\s)(?:--?|/)(?:c|co|com|comm|comma|comman|command|f|fi|fil|file)\b"
 )
 VARIABLE_READER_RE = re.compile(
     r"(?i)(?:get-content|get-item|get-childitem|gc|cat|type|select-string|sls|import-csv|"
