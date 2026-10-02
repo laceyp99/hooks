@@ -240,6 +240,26 @@ def test_shell_reader_through_a_hard_link_to_a_secret_is_denied(project, monkeyp
     assert _decide(payload, monkeypatch) == "deny"
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "command"),
+    [("Bash", 'cat "release notes.txt"'), ("PowerShell", 'Get-Content "release notes.txt"')],
+)
+def test_quoted_spaced_hard_link_to_secret_is_denied(
+    project, monkeypatch, tool_name: str, command: str
+) -> None:
+    os.link(project / ENV, project / "release notes.txt")
+
+    assert _decide(_call(tool_name, {"command": command}, project), monkeypatch) == "deny"
+
+
+def test_quoted_spaced_ordinary_file_is_allowed(project, monkeypatch) -> None:
+    (project / "release notes.txt").write_text("public\n", encoding="utf-8")
+
+    assert (
+        _decide(_call("Bash", {"command": 'cat "release notes.txt"'}, project), monkeypatch) is None
+    )
+
+
 def test_hard_link_elsewhere_to_a_secret_in_cwd_is_denied(project, monkeypatch) -> None:
     os.link(project / ENV, project / "src" / "notes.txt")
 

@@ -188,10 +188,17 @@ PRINTF_FORMAT_RE = re.compile(
 )
 ASSIGNMENT_RE = re.compile(r"(?i)(?:\$)?([a-z_][a-z0-9_]*)\s*=\s*([^;|&\r\n]+)")
 VARIABLE_RE = re.compile(r"\$\{?([a-z_][a-z0-9_]*)\}?", re.IGNORECASE)
-OPAQUE_COMMAND_RE = re.compile(
-    r"(?i)(?:^|[\s;&|])(?:iex|invoke-expression|start-process)\b"
-    r"|(?:^|\s)-(?:e|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|"
-    r"encodedcomm|encodedcomma|encodedcomman|encodedcommand)\b"
+OPAQUE_COMMAND_RE = re.compile(r"(?i)(?:^|[\s;&|])(?:iex|invoke-expression|start-process)\b")
+POWERSHELL_INVOCATION_RE = re.compile(
+    r"(?i)(?:^|[\s;&|])(?:[\"'](?:[^\"']*[\\/])?|[^\s;&|]*[\\/])?"
+    r"(?:powershell|pwsh)(?:\.exe)?[\"']?(?=\s|$)"
+)
+POWERSHELL_ENCODED_FLAG_RE = re.compile(
+    r"(?i)(?:^|\s)-(?:e|en|enc|enco|encod|encode|encoded|encodedc|encodedco|"
+    r"encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)\b"
+)
+POWERSHELL_SCRIPT_FLAG_RE = re.compile(
+    r"(?i)(?:^|\s)-(?:c|co|com|comm|comma|comman|command|f|fi|fil|file)\b"
 )
 VARIABLE_READER_RE = re.compile(
     r"(?i)(?:get-content|get-item|get-childitem|gc|cat|type|select-string|sls|import-csv|"
@@ -291,6 +298,8 @@ def _matches_env_path_pattern(value: str) -> bool:
     if "=" in normalized:
         normalized = normalized.rsplit("=", 1)[-1]
     normalized = normalized.lstrip("@").replace("\\", "/").lower()
+    if _matches_env_path(normalized):
+        return True
     if not normalized or not any(char in normalized for char in "*?["):
         return False
 
@@ -697,10 +706,22 @@ def _expand_static_shell_variables(command: str) -> str:
     )
 
 
+def _has_powershell_encoded_launch(command: str) -> bool:
+    """Check launch options before PowerShell's command or file argument."""
+    for invocation in POWERSHELL_INVOCATION_RE.finditer(command):
+        arguments = re.split(r"[;&|\r\n]", command[invocation.end() :], maxsplit=1)[0]
+        script_flag = POWERSHELL_SCRIPT_FLAG_RE.search(arguments)
+        if script_flag:
+            arguments = arguments[: script_flag.start()]
+        if POWERSHELL_ENCODED_FLAG_RE.search(arguments):
+            return True
+    return False
+
+
 def _find_env_access_in_command(command: str, cwd: str | None = None) -> str | None:
     """Block protected names and matching globs wherever they appear in shell text."""
     expanded = _expand_static_shell_variables(command).replace("`", "")
-    if OPAQUE_COMMAND_RE.search(expanded):
+    if OPAQUE_COMMAND_RE.search(expanded) or _has_powershell_encoded_launch(expanded):
         return "opaque dynamic command"
 
     for match in PRINTF_FORMAT_RE.finditer(expanded):
@@ -727,6 +748,8 @@ def _find_env_access_in_command(command: str, cwd: str | None = None) -> str | N
             lambda item: chr(int(item.group(1), 16)),
             escaped,
         )
+        if cwd and _find_resolved_env_target(escaped, cwd):
+            return escaped
         for part in iter_string_tokens(escaped):
             if _matches_env_path_pattern(part):
                 return part
@@ -855,10 +878,8 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any] | None:
         if blocked_git_command:
             return _git_block_response(blocked_git_command)
 
-    # A tool that names its target in a dedicated field is denied on the name, or on the path it
-    # resolves to (links, junctions, short names, stream suffixes). A shell
-    # command is denied only when it actually reads or writes the file, because everything else
-    # on a command line is text the command carries rather than a file it touches.
+    # Dedicated file targets are checked by name and resolved path. Shell commands are also
+    # checked for protected names wherever they appear, plus nearby links and opaque commands.
     blocked_path = (
         _find_env_path_in_shell_payload(tool_input, cwd)
         if is_shell

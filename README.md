@@ -34,7 +34,7 @@ Any folder works, with one exception: the **Pi** and **OpenCode** bridges look f
 
 It asks before each step, so you can install only the harnesses you use. Answer `y` to the ones you want.
 
-Every write is backed up first to a timestamped `.bak-*` file next to the original. For Claude Code it touches **only** the `hooks` key of `settings.json`; every other setting you have is left exactly as it was.
+Every write is backed up first to a timestamped `.bak-*` file next to the original. For Claude Code, the installer updates managed hooks and adds protected-path deny rules under `permissions` in `settings.json`. It keeps your other settings and existing permission rules.
 
 ### 4. Trust the hooks in Codex
 
@@ -54,8 +54,8 @@ runner="$HOME/.claude/hooks/run_hook.py"
 # Expect a JSON deny payload:
 echo '{"tool_name":"Bash","tool_input":{"command":"cat .env"}}' | python "$runner" pre-tool
 
-# Expect no output at all, because this only mentions the file:
-echo '{"tool_name":"Bash","tool_input":{"command":"git commit -m \"document .env\""}}' | python "$runner" pre-tool
+# Expect no output for an ordinary command:
+echo '{"tool_name":"Bash","tool_input":{"command":"git status --short"}}' | python "$runner" pre-tool
 ```
 
 The first prints a `permissionDecision: deny` payload naming `.env`. The second prints nothing, which means allowed. If both print nothing, the hooks are not wired up — see [Troubleshooting](#troubleshooting).
@@ -193,7 +193,7 @@ Installs made before the single runner registered one hook per script: `pre_tool
 - The two PreToolUse entries collapse into one `run_hook.py pre-tool`, and the post-tool and stop entries are rewritten to `post-tool` and `stop`. A container left empty by the collapse is removed.
 - The PreToolUse matcher becomes `Bash|PowerShell|Edit|MultiEdit|Write|NotebookEdit|Read|Grep|mcp__.*`. **The matcher belongs to the container**, so one of your own hooks sharing that container starts firing on `Grep` and MCP tools too. Move it to its own container first if you do not want that.
 - Any entry whose command mentions `run_hook.py` counts as managed, and its command, timeout, and status message are reset to the template's. A hand-tuned timeout does not survive.
-- `settings.json` is rewritten whole, so indentation is normalized and non-ASCII characters come back as `\uXXXX` escapes. Only the `hooks` key changes in substance; the file is written as UTF-8 with no byte order mark.
+- `settings.json` is rewritten whole, so indentation is normalized and non-ASCII characters come back as `\uXXXX` escapes. Managed `hooks` entries and protected-path deny rules under `permissions` can change; the file is written as UTF-8 with no byte order mark.
 
 **What it deletes**
 
