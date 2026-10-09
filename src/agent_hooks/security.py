@@ -806,12 +806,13 @@ def _join_shell_words(command: str) -> str:
     """Return ``command`` with each word spelled the way the shell will receive it.
 
     Quoted pieces glued into a larger word are joined (``.en""v``, ``po''wershell``), backslash
-    escapes are dropped (``.e\\nv``), and ``{a,b}`` braces are expanded (``{.e,}nv``). A word that
-    is quoted whole keeps its quotes, so ``rg 'iex' src`` still reads as data. Dropping escapes
-    mangles Windows paths, so this form is checked in addition to the original, never instead.
+    escapes and cmd's ``^`` escapes are dropped (``.e\\nv``, ``p^owershell``), and ``{a,b}``
+    braces are expanded (``{.e,}nv``). A word that is quoted whole keeps its quotes, so
+    ``rg 'iex' src`` still reads as data. Dropping escapes mangles Windows paths, so this form is
+    checked in addition to the original, never instead.
     """
     joined = QUOTED_PIECE_RE.sub(_join_glued_quote, command)
-    joined = SHELL_ESCAPE_RE.sub(lambda match: match.group(1) or "", joined)
+    joined = SHELL_ESCAPE_RE.sub(lambda match: match.group(1) or "", joined).replace("^", "")
     return BRACE_WORD_RE.sub(lambda match: " ".join(_expand_braces(match.group(0))), joined)
 
 

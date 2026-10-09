@@ -93,8 +93,8 @@ How the check applies depends on how the tool names its target:
   ```
 
 Static checks also expand simple literal assignments, string joins, printf escapes, and base64
-arguments, and read each word the way the shell will: `.en""v`, `.e\nv`, and `{.e,}nv` all count
-as `.env`. PowerShell `-EncodedCommand`, `Invoke-Expression`/`iex`, and `Start-Process` are denied
+arguments, and read each word the way the shell will: `.en""v`, `.e\nv`, cmd's `.e^nv`, and
+`{.e,}nv` all count as `.env`. PowerShell `-EncodedCommand`, `Invoke-Expression`/`iex`, and `Start-Process` are denied
 because their command text can hide the path from inspection.
 
 Suffix rules such as `*.env` and `*.pem` apply to words with a directory part or files that exist,

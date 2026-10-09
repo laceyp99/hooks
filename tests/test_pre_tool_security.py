@@ -557,6 +557,8 @@ def test_variable_arguments_are_allowed(pre_tool_security, command: str) -> None
         "cat '.e''nv'",
         "po''wershell -enc SGVsbG8=",
         '"pow"ershell -ec SGVsbG8=',
+        "cmd /c p^owershell -enc SGVsbG8=",
+        "cmd /c type .e^nv",
     ],
 )
 def test_shell_quoting_and_braces_do_not_hide_a_name(pre_tool_security, command: str) -> None:
@@ -566,7 +568,13 @@ def test_shell_quoting_and_braces_do_not_hide_a_name(pre_tool_security, command:
 
 @pytest.mark.parametrize(
     "command",
-    ["rg 'Invoke-Expression' src", 'echo "it works" {a,b}.txt', 'git commit -m "fix: x"'],
+    [
+        "rg 'Invoke-Expression' src",
+        'echo "it works" {a,b}.txt',
+        'git commit -m "fix: x"',
+        "rg '^def ' src",
+        "git diff HEAD^ --stat",
+    ],
 )
 def test_whole_quoted_words_and_plain_braces_are_allowed(pre_tool_security, command: str) -> None:
     assert pre_tool_security._find_env_access_in_command(command) is None
