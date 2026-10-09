@@ -144,8 +144,8 @@ def test_main_blocks_env_like_paths(pre_tool_security, monkeypatch) -> None:
     assert blocked in message["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_main_blocks_protected_names_anywhere_in_shell_text(pre_tool_security, monkeypatch) -> None:
-    """The shell guard blocks even when the protected name is used as data."""
+def test_main_allows_protected_names_used_as_data(pre_tool_security, monkeypatch) -> None:
+    """Messages, search patterns and ignore-file lines name a secret without opening it."""
     target = _dot("env")
     mentions = [
         f'git commit -m "fix {target} loading"',
@@ -159,9 +159,7 @@ def test_main_blocks_protected_names_anywhere_in_shell_text(pre_tool_security, m
         exit_code, output = _run_main(pre_tool_security, monkeypatch, json.dumps(payload))
 
         assert exit_code == 0
-        message = json.loads(output)
-        assert message["hookSpecificOutput"]["permissionDecision"] == "deny", command
-        assert target in message["hookSpecificOutput"]["permissionDecisionReason"]
+        assert output == "", command
 
 
 def test_main_still_blocks_shell_commands_that_touch_the_file(

@@ -66,18 +66,31 @@ Swap `.claude` for `.codex` to check the Codex bundle the same way.
 
 ### Secret files
 
-Access to secret-bearing files is denied: `.env`, common `.env` variants, `.envrc`, `*.env`, `*.secret`, `*.secrets`, `*.pem`, `id_rsa`, `credentials.json`, and anything under `.direnv/`. Direct access to templates such as `.env.example` and `.env.sample` stays allowed.
+Access to secret-bearing files is denied: `.env`, common `.env` variants, `.envrc`, `*.env`, `*.secret`, `*.secrets`, `*.pem`, `id_rsa`, `credentials.json`, and anything under `.direnv/`. Templates stay allowed: `.env.example`, `.env.sample`, `.env.template`, `.env.dist`, and `.env.defaults`. A `.pem` under `node_modules` or `site-packages` (a vendored CA bundle such as certifi's `cacert.pem`) is allowed by the hook; Claude Code's `Read(//**/*.pem)` deny rule still covers it for the built-in `Read` and `Edit` tools.
 
 How the check applies depends on how the tool names its target:
 
 - **Tools with a file field** (`Read`, `Edit`, `Write`, `NotebookEdit`, `apply_patch`, and MCP tools) are denied on the name, and on the **path it resolves to**. Relative paths are resolved against the session's working directory, then through symlinks, NTFS junctions, 8.3 short names, and `\\?\` prefixes; alternate data streams (`.env::$DATA`) count as the file itself; and a hard link to a protected file in the same directory or the working directory is caught too.
 - **`Grep`** returns file contents, so it is denied when its `path` targets a protected file or its `glob` (OpenCode: `include`) would select one, such as `**/.env*`. The search `pattern` is never checked, so searching *for* the text `.env` is fine.
-- **Shell commands** are denied whenever their text contains a protected path or a wildcard that can select one, whatever program is named. This catches commands such as `wc`, PowerShell reads and writes, interpreter code, redirects, and pipelines without relying on a reader-command list. It also blocks harmless mentions in shell text, including commit messages and search patterns.
+- **Shell commands** are denied when a word names a protected path, or is a wildcard aimed at one, whatever program is named. This catches `wc`, PowerShell reads and writes, interpreter code, redirects, and pipelines without relying on a reader-command list.
+
+  A few argument positions only carry text the command never opens, so a protected name there is allowed when the argument is a plain literal:
+
+  | Position | Examples |
+  |---|---|
+  | Messages | `git commit -m`, `git tag/merge/stash/notes -m`, `git log --grep`, `gh --title/--body/--notes` |
+  | Search patterns | the pattern of `rg`, `grep`, `git grep`, and `Select-String` (`-e`, `-Pattern`, or the first positional) |
+  | Exclusions | `--exclude`, `--exclude-dir`, PowerShell `-Exclude`, `rg --glob '!x'`, `zip -x`, `robocopy /XF /XD` |
+  | Ignore files | `echo`/`printf` redirected into `.gitignore`-style files, `Add-Content`/`Set-Content` on them |
+
+  An argument containing `$` or a backtick can run code, so it is always checked; Claude Code's `-m "$(cat <<'EOF' ... EOF)"` form counts as literal because its delimiter is quoted. File arguments beside these stay checked: `grep -e x .env`, `rg -f .env`, and `git commit -F .env` are denied.
 
   ```bash
-  git commit -m "tighten secret-file guard"
-  gh pr create --body "Adds secret-file checks"
-  grep -rn "secret-file guard" src/
+  git commit -m "fix .env loading"
+  rg -n "\.env" src
+  tar --exclude=.env -czf release.tgz .
+  echo .env >> .gitignore
+  rm -rf build/*
   ```
 
   while these are denied:
@@ -89,17 +102,30 @@ How the check applies depends on how the tool names its target:
   cp .env /tmp/elsewhere
   cat .e*
   git add .env
-  git commit -m "fix .env loading"  # even a text-only mention is blocked
+  git commit -m "$(cat .env)"
   ```
 
 Static checks also expand simple literal assignments, string joins, printf escapes, and base64
 arguments, and read each word the way the shell will: `.en""v`, `.e\nv`, cmd's `.e^nv`, and
-`{.e,}nv` all count as `.env`. PowerShell `-EncodedCommand`, `Invoke-Expression`/`iex`, and `Start-Process` are denied
-because their command text can hide the path from inspection.
+`{.e,}nv` all count as `.env`.
+
+Wildcards get the same test as `Grep` globs: a pattern is denied when it matches a protected name
+and no ordinary one. `.e*` and `*.env` are denied; `*`, `build/*`, and `src/**/*` select ordinary
+files too and pass.
+
+PowerShell `-EncodedCommand`, `Invoke-Expression`/`iex` run as a command, and `Start-Process`
+whose program is a variable, an expression, or a shell are denied because their text can hide
+what runs. `Start-Process npm -ArgumentList 'run dev'` and Elixir's `iex -S mix` pass.
 
 Suffix rules such as `*.env` and `*.pem` apply to words with a directory part or files that exist,
 so `rg process.env src` is allowed. A command too large to inspect in about 10 seconds is denied,
 because a hook that times out lets the call through.
+
+Each denial says which rule fired. Direct access to a secret tells the agent the human handles it
+(pointing at `.env.example` when one exists) and offers no other route. A wildcard denial asks for
+explicit names or an exclusion, a hidden-command denial asks for literal arguments, a size denial
+asks for smaller commands or a script file, and a Git-internals denial points at git commands or
+`.gitignore`.
 
 ### Git internals
 
@@ -167,7 +193,8 @@ Worth knowing before you rely on these:
 - **Hard-link detection is local.** A hard link to a secret is caught only when the secret sits in the same directory as the link or in the working directory.
 - **A broad search glob is allowed even when a secret is under it.** `Grep` is denied for a glob aimed at a secret, such as `**/.env*` or `*.env`, but a glob that also selects ordinary files is treated as a broad search and allowed. `config/*` therefore passes even though `config/.env` is among the files it selects. Naming the file, in `path` or in the glob itself, is what the rule catches.
 - **Bulk staging is not covered.** `git add .`, `git add -A`, and `git commit -a` will happily stage a secret file, because the command never names it. The guard cannot see this without consulting repository state. **Put the file in `.gitignore`** — that is the reliable fix, and a project-level `pre-commit` hook is the right place to enforce it for repos that need it.
-- **Shell text can produce false positives.** A harmless command that mentions a protected path, or uses a broad wildcard that could select one, is denied. Use a description that does not spell the protected path when writing commit messages or search patterns from the shell.
+- **Shell text can still produce false positives.** A protected name outside the data positions above is denied even when nothing opens it: an existence check such as `Test-Path .env`, a heredoc that writes documentation, or `require('./config').env`. Write files with the `Write` tool, whose content is not inspected. `.*` and `????` stay denied because no ordinary name matches them.
+- **`cat *` in PowerShell reads dotfiles.** Bash's `*` skips names starting with a dot, but PowerShell's `Get-Content *` includes `.env`. Broad wildcards are allowed, as they are for `Grep`.
 - **A secret committed once stays in history.** Deleting it in a later commit does not remove it from earlier commits. If it was pushed, rotate the secret; cleaning history needs a rewrite.
 - **OpenCode cannot block at the end of a session.** Its only session-completion signal is the `session.idle` event, which fires after every turn the agent finishes and has no way to refuse. The Ruff sweep therefore *reports* on OpenCode where Claude Code's `Stop` hook would block, so `AGENT_HOOKS_STOP_FIX` still governs whether files are rewritten but a finding never holds the session open.
 - **These are guardrails, not a security boundary.** Claude Code's path rules cover its built-in file tools and shell commands it recognizes, but not arbitrary subprocesses. See [Claude Code permission rules](https://code.claude.com/docs/en/permissions#read-and-edit). To keep a secret from any process the agent can start, keep it outside the workspace or deny the agent account access with an ACL.

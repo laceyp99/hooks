@@ -190,26 +190,24 @@ def test_notebook_path_is_a_file_target(pre_tool_security, git_internal_path) ->
     assert pre_tool_security._find_protected_git_path(payload) == git_internal_path("config")
 
 
-def test_protected_names_are_blocked_even_when_command_text_mentions_them(
-    pre_tool_security,
-) -> None:
-    """Every literal secret-path mention in shell text is denied, including data text."""
+def test_protected_names_outside_data_arguments_are_blocked(pre_tool_security) -> None:
+    """Writing to a secret is denied; appending its name to an ignore file is data."""
     find = pre_tool_security._find_env_access_in_command
     target = _dot("env")
 
-    assert find(f'echo "{target}" >> .gitignore') == target
+    assert find(f'echo "{target}" >> .gitignore') is None
     assert find(f"echo LEAK=1 >> {target}") == target
     assert find(f"echo x > {target}") == target
     assert find(f"cat {_join_suffix(target, 'example')}") is None
     assert find(f"wc -c {_join_suffix(target, 'sample')}") is None
 
 
-def test_shell_commands_are_not_exempted_by_their_program_name(pre_tool_security) -> None:
+def test_git_file_arguments_are_checked_while_messages_are_data(pre_tool_security) -> None:
     find = pre_tool_security._find_env_access_in_command
     target = _dot("env")
 
-    assert find(f'git commit -m "document {target}"') == target
-    assert find(f'git log --grep "{target}"') == target
+    assert find(f'git commit -m "document {target}"') is None
+    assert find(f'git log --grep "{target}"') is None
     assert find(f"git add {target}") == target
     assert find(f"git checkout -- {target}") == target
 
@@ -438,8 +436,9 @@ def test_git_subcommand_is_found_past_prefixes_and_global_options(pre_tool_secur
     assert find(f"GIT_PAGER=cat git add {target}") == target
     assert find(f"git -C . add {target}") == target
     assert find(f"git --git-dir=/tmp/r/.git add {target}") == target
-    assert find(f'sudo git commit -m "note {target}"') == target
-    assert find(f'git -c user.email=t@t commit -m "note {target}"') == target
+    assert find(f'sudo git commit -m "note {target}" -- {target}') == target
+    assert find(f'git -c user.email=t@t commit -m "note" {target}') == target
+    assert find(f'git -c user.email=t@t commit -m "note {target}"') is None
 
 
 def test_access_is_detected_past_prefixes_and_program_paths(pre_tool_security) -> None:

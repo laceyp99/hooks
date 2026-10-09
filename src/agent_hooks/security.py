@@ -22,6 +22,7 @@ from agent_hooks.common import (
     load_stdin_payload,
     normalize_tool_name,
 )
+from agent_hooks.shell_args import find_opaque_command, mask_data_arguments
 
 PROTECTED_ENV_EXACT_NAMES = {
     ".env",
@@ -49,6 +50,12 @@ PROTECTED_ENV_SUFFIXES = (
 PROTECTED_ENV_PATH_PARTS = {
     ".direnv",
 }
+
+# Committed templates that hold variable names, not values.
+TEMPLATE_SUFFIXES = (".example", ".sample", ".template", ".dist", ".defaults")
+
+# Dependency folders ship public CA bundles such as certifi's ``cacert.pem``.
+VENDORED_DIRECTORY_NAMES = frozenset({"node_modules", "site-packages"})
 
 FILE_ACCESS_TOOLS = {
     "apply_patch",
@@ -189,7 +196,6 @@ PRINTF_FORMAT_RE = re.compile(
 )
 ASSIGNMENT_RE = re.compile(r"(?i)(?<![a-z0-9_$])\$?([a-z_][a-z0-9_]*)\s*=\s*([^;|&\r\n]+)")
 VARIABLE_RE = re.compile(r"\$\{?([a-z_][a-z0-9_]*)\}?", re.IGNORECASE)
-OPAQUE_COMMAND_RE = re.compile(r"(?i)(?:^|[\s;&|])(?:iex|invoke-expression|start-process)\b")
 # A launch can open a subshell or group, as in ``$(pwsh -e ...)`` or ``(pwsh -e ...)``.
 POWERSHELL_INVOCATION_RE = re.compile(
     r"(?i)(?:^|[\s;&|({])(?:[\"'](?:[^\"']*[\\/])?|[^\s;&|(){}]*[\\/])?"
@@ -220,6 +226,7 @@ BRACE_WORD_RE = re.compile(
 # inspected within this budget is denied instead. The installed hook timeout is 30 s.
 SHELL_CHECK_BUDGET_SECONDS = 10.0
 BUDGET_EXCEEDED = "command too large to inspect in time"
+OPAQUE_COMMAND = "opaque dynamic command"
 
 
 def _is_grep_tool(tool_name: str) -> bool:
@@ -271,15 +278,18 @@ def _segment_names(segment: str) -> list[str]:
     return names
 
 
-def _is_protected_env_name(name: str, *, suffixes: bool = True) -> bool:
+def _is_protected_env_name(name: str, *, suffixes: bool = True, vendored: bool = False) -> bool:
     if name in PROTECTED_ENV_PATH_PARTS or name in PROTECTED_ENV_EXACT_NAMES:
         return True
 
-    if name.endswith(".example") or name.endswith(".sample"):
+    if name.endswith(TEMPLATE_SUFFIXES):
         return False
 
     if any(name.startswith(prefix) for prefix in PROTECTED_ENV_PREFIXES):
         return True
+
+    if vendored and name.endswith(".pem"):
+        return False
 
     return suffixes and any(name.endswith(suffix) for suffix in PROTECTED_ENV_SUFFIXES)
 
@@ -299,7 +309,11 @@ def _matches_env_path(value: str, *, bare_suffixes: bool = True) -> bool:
         return False
 
     suffixes = bare_suffixes or len(parts) > 1
-    if any(_is_protected_env_name(name, suffixes=suffixes) for name in _segment_names(parts[-1])):
+    vendored = any(part.lower() in VENDORED_DIRECTORY_NAMES for part in parts[:-1])
+    if any(
+        _is_protected_env_name(name, suffixes=suffixes, vendored=vendored)
+        for name in _segment_names(parts[-1])
+    ):
         return True
 
     return any(
@@ -310,10 +324,12 @@ def _matches_env_path(value: str, *, bare_suffixes: bool = True) -> bool:
 
 
 def _matches_env_path_pattern(value: str) -> bool:
-    """Return whether a word in shell text names, or as a glob can select, a protected file.
+    """Return whether a word in shell text names, or as a glob is aimed at, a protected file.
 
     Suffix rules apply only to words with a directory part; an existing file is caught by its
-    resolved path instead (see ``_find_resolved_shell_word``).
+    resolved path instead (see ``_find_resolved_shell_word``). Globs get the same test as the
+    Grep tool's: ``.e*`` is aimed at secrets, while ``*`` and ``build/*`` also select ordinary
+    files and pass.
     """
     if _matches_env_path(value, bare_suffixes=False):
         return True
@@ -326,31 +342,7 @@ def _matches_env_path_pattern(value: str) -> bool:
         return True
     if not normalized or not any(char in normalized for char in "*?["):
         return False
-
-    parts = [part for part in normalized.split("/") if part]
-    if not parts:
-        return False
-
-    protected_names = (
-        ".env",
-        ".env.local",
-        ".env.production",
-        ".envrc",
-        ".envrc.local",
-        ".secrets",
-        ".secrets.local",
-        "credentials.json",
-        "id_rsa",
-        "local.env",
-        "prod.env",
-        "private.pem",
-        "secrets.env",
-        "x.secret",
-        "x.secrets",
-    )
-    if any(fnmatchcase(name, parts[-1]) for name in protected_names):
-        return True
-    return any(fnmatchcase(".direnv", part) for part in parts[:-1])
+    return _glob_targets_protected_file(normalized)
 
 
 def _matches_protected_git_path(value: str) -> bool:
@@ -817,18 +809,21 @@ def _join_shell_words(command: str) -> str:
 
 
 def _find_env_access_in_command(command: str, cwd: str | None = None) -> str | None:
-    """Block protected names and matching globs wherever they appear in shell text.
+    """Block protected names and globs aimed at them anywhere in shell text, except data.
 
-    Each word is checked by name and, when ``cwd`` is known and the word exists on disk, by where
-    it resolves. A check that would outrun ``SHELL_CHECK_BUDGET_SECONDS`` denies instead.
+    Literal data arguments (messages, search patterns, exclusions, ignore-file appends) are
+    blanked first; see ``shell_args.mask_data_arguments``. Each remaining word is checked by name
+    and, when ``cwd`` is known and the word exists on disk, by where it resolves. A check that
+    would outrun ``SHELL_CHECK_BUDGET_SECONDS`` denies instead.
     """
     deadline = time.monotonic() + SHELL_CHECK_BUDGET_SECONDS
+    command = mask_data_arguments(command)
     expanded = _expand_static_shell_variables(command).replace("`", "")
     joined = _join_shell_words(expanded)
     texts = (expanded,) if joined == expanded else (expanded, joined)
     for text in texts:
-        if OPAQUE_COMMAND_RE.search(text) or _has_powershell_encoded_launch(text):
-            return "opaque dynamic command"
+        if find_opaque_command(text) or _has_powershell_encoded_launch(text):
+            return OPAQUE_COMMAND
 
     for match in PRINTF_FORMAT_RE.finditer(expanded):
         argument = next(value for value in match.groups()[2:] if value is not None)
@@ -956,26 +951,63 @@ def _find_protected_git_mutation_command(value: Any) -> str | None:
     return None
 
 
-def _block_response(path: str) -> dict[str, Any]:
+def _deny(system_message: str, reason: str) -> dict[str, Any]:
     return {
-        "systemMessage": "Human must handle env-like secret files manually.",
+        "systemMessage": system_message,
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": f"Human must handle env-like secret files manually; do not read or modify them. Blocked target: {path}",
+            "permissionDecisionReason": reason,
         },
     }
+
+
+def _is_glob_target(target: str) -> bool:
+    return any(char in target.split(" (", 1)[0] for char in "*?[")
+
+
+def _block_response(path: str, cwd: str | None = None) -> dict[str, Any]:
+    """Explain which rule fired and, where it is safe, the route that will pass.
+
+    Real access to a secret gets no workaround: the human handles it. The other rules fire on
+    command shapes, and each names the shape that will be checked and allowed instead.
+    """
+    if path == OPAQUE_COMMAND:
+        return _deny(
+            "Blocked a command the secret guard cannot inspect.",
+            "This command runs code the secret guard cannot read (Invoke-Expression, an "
+            "encoded PowerShell command, or Start-Process with a variable or shell). Run the "
+            f"command directly with literal arguments so it can be checked. Blocked: {path}",
+        )
+    if path == BUDGET_EXCEEDED:
+        return _deny(
+            "Blocked a command too large to inspect.",
+            "This command is too large for the secret guard to inspect in time. Split it into "
+            f"smaller commands, or write the script to a file and run that file. Blocked: {path}",
+        )
+    if _is_glob_target(path):
+        return _deny(
+            "Blocked a pattern that selects env-like secret files.",
+            "This pattern selects env-like secret files. Name the files you need explicitly, "
+            f"or exclude the secret files from the pattern. Blocked pattern: {path}",
+        )
+
+    reason = (
+        "Human must handle env-like secret files manually; do not read or modify them. "
+        f"Blocked target: {path}"
+    )
+    base = _base_directory(cwd)
+    if ".env" in path.lower() and base and os.path.isfile(os.path.join(base, ".env.example")):
+        reason += " For variable names, read .env.example instead."
+    return _deny("Human must handle env-like secret files manually.", reason)
 
 
 def _git_block_response(path: str) -> dict[str, Any]:
-    return {
-        "systemMessage": "Human must handle protected Git internals manually.",
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": f"Human must handle protected Git internals manually; do not write or move them. Blocked target: {path}",
-        },
-    }
+    return _deny(
+        "Human must handle protected Git internals manually.",
+        "Writing Git internals directly is blocked. Use git commands instead, or .gitignore "
+        f"for ignore rules. Blocked target: {path}",
+    )
 
 
 def evaluate(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -1009,7 +1041,7 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any] | None:
         else _find_env_path(tool_input, cwd, tool_name)
     )
     if blocked_path:
-        return _block_response(blocked_path)
+        return _block_response(blocked_path, cwd)
 
     return None
 
