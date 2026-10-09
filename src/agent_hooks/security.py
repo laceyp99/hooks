@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import base64
+import functools
 import json
 import os
 import re
 import stat
 import sys
+import time
 from collections.abc import Callable, Iterator
 from fnmatch import fnmatchcase
-from pathlib import PurePath
 from typing import Any
 
 from agent_hooks.common import (
@@ -186,7 +187,7 @@ STRING_CONCAT_RE = re.compile(r"(['\"])([^'\"\r\n]*)\1\s*\+\s*(['\"])([^'\"\r\n]
 PRINTF_FORMAT_RE = re.compile(
     r"(?i)\bprintf\s+(['\"])([^'\"]*)\1\s+(?:'([^']*)'|\"([^\"]*)\"|([^\s;|)&]+))"
 )
-ASSIGNMENT_RE = re.compile(r"(?i)(?:\$)?([a-z_][a-z0-9_]*)\s*=\s*([^;|&\r\n]+)")
+ASSIGNMENT_RE = re.compile(r"(?i)(?<![a-z0-9_$])\$?([a-z_][a-z0-9_]*)\s*=\s*([^;|&\r\n]+)")
 VARIABLE_RE = re.compile(r"\$\{?([a-z_][a-z0-9_]*)\}?", re.IGNORECASE)
 OPAQUE_COMMAND_RE = re.compile(r"(?i)(?:^|[\s;&|])(?:iex|invoke-expression|start-process)\b")
 # A launch can open a subshell or group, as in ``$(pwsh -e ...)`` or ``(pwsh -e ...)``.
@@ -202,14 +203,23 @@ POWERSHELL_ENCODED_FLAG_RE = re.compile(
 POWERSHELL_SCRIPT_FLAG_RE = re.compile(
     r"(?i)(?:^|\s)(?:--?|/)(?:c|co|com|comm|comma|comman|command|f|fi|fil|file)\b"
 )
-VARIABLE_READER_RE = re.compile(
-    r"(?i)(?:get-content|get-item|get-childitem|gc|cat|type|select-string|sls|import-csv|"
-    r"get-filehash|format-hex|copy-item|move-item|remove-item|set-content|add-content|out-file|"
-    r"awk|sed|grep|rg|wc|head|tail|tac|nl|od|xxd|hexdump|strings|base64|cp|mv|dd|tar|zip|"
-    r"source|diff|cmp|sort|uniq|cut|paste|tee|curl|python|node|perl|ruby|"
-    r"readalltext|readalllines|readallbytes|openread|opentext|streamreader)\b[^;\r\n]*"
-    r"(?:\$\{?[a-z_][a-z0-9_]*\}?|%[a-z_][a-z0-9_]*%|\[[^\]]+\]::\w+\s*\()"
+COMMAND_SEGMENT_END_RE = re.compile(r"[;&|\r\n]")
+
+# Characters that end a shell word. A quoted piece touching anything else is part of a larger
+# word, as in ``.en""v`` or ``po''wershell``.
+SHELL_WORD_BREAKS = frozenset(" \t\r\n;&|<>()")
+QUOTED_PIECE_RE = re.compile(r"'([^'\r\n]*)'|\"([^\"\r\n]*)\"")
+SHELL_ESCAPE_RE = re.compile(r"\\(?:\r?\n|(.))")
+# Anchored at a word start: an unanchored ``[^...]*`` prefix rescans a long word from every
+# character and turns one long word into quadratic work.
+BRACE_WORD_RE = re.compile(
+    r"(?<![^\s;&|<>()])[^\s;&|<>(){}]*(?<!\$)\{[^{}\s]*,[^{}\s]*\}[^\s;&|<>()]*"
 )
+
+# A check that runs past the harness timeout lets the call through, so a command that cannot be
+# inspected within this budget is denied instead. The installed hook timeout is 30 s.
+SHELL_CHECK_BUDGET_SECONDS = 10.0
+BUDGET_EXCEEDED = "command too large to inspect in time"
 
 
 def _is_grep_tool(tool_name: str) -> bool:
@@ -250,16 +260,18 @@ def _segment_names(segment: str) -> list[str]:
     dots and spaces, so ``.env::$DATA`` and ``.env.`` both open ``.env``. Every colon-separated
     piece is a candidate rather than only the first, because ``host:.env`` in an ``scp`` argument
     names the remote ``.env``. A drive letter ``C:`` yields ``c``, which matches nothing.
+    Callers split on ``/`` first, so a piece is already a bare name; plain string handling keeps
+    this cheap, since a shell check calls it for every word.
     """
     names: list[str] = []
-    for piece in segment.split(":"):
-        name = PurePath(piece).name.lower().rstrip(" .") if piece else ""
+    for piece in segment.replace("\\", "/").split(":"):
+        name = piece.rsplit("/", 1)[-1].lower().rstrip(" .")
         if name:
             names.append(name)
     return names
 
 
-def _is_protected_env_name(name: str) -> bool:
+def _is_protected_env_name(name: str, *, suffixes: bool = True) -> bool:
     if name in PROTECTED_ENV_PATH_PARTS or name in PROTECTED_ENV_EXACT_NAMES:
         return True
 
@@ -269,10 +281,15 @@ def _is_protected_env_name(name: str) -> bool:
     if any(name.startswith(prefix) for prefix in PROTECTED_ENV_PREFIXES):
         return True
 
-    return any(name.endswith(suffix) for suffix in PROTECTED_ENV_SUFFIXES)
+    return suffixes and any(name.endswith(suffix) for suffix in PROTECTED_ENV_SUFFIXES)
 
 
-def _matches_env_path(value: str) -> bool:
+def _matches_env_path(value: str, *, bare_suffixes: bool = True) -> bool:
+    """Return whether ``value`` names a protected file or sits in a protected directory.
+
+    With ``bare_suffixes=False`` the suffix rules (``*.env``, ``*.pem``) apply only to a value
+    with a directory part, so a bare word in shell text such as ``process.env`` is not a file.
+    """
     normalized = value.strip().replace("\\", "/")
     if not normalized:
         return False
@@ -281,7 +298,8 @@ def _matches_env_path(value: str) -> bool:
     if not parts:
         return False
 
-    if any(_is_protected_env_name(name) for name in _segment_names(parts[-1])):
+    suffixes = bare_suffixes or len(parts) > 1
+    if any(_is_protected_env_name(name, suffixes=suffixes) for name in _segment_names(parts[-1])):
         return True
 
     return any(
@@ -292,15 +310,19 @@ def _matches_env_path(value: str) -> bool:
 
 
 def _matches_env_path_pattern(value: str) -> bool:
-    """Return whether a path or file glob can select a protected file."""
-    if _matches_env_path(value):
+    """Return whether a word in shell text names, or as a glob can select, a protected file.
+
+    Suffix rules apply only to words with a directory part; an existing file is caught by its
+    resolved path instead (see ``_find_resolved_shell_word``).
+    """
+    if _matches_env_path(value, bare_suffixes=False):
         return True
 
     normalized = value.strip().strip("\"'")
     if "=" in normalized:
         normalized = normalized.rsplit("=", 1)[-1]
     normalized = normalized.lstrip("@").replace("\\", "/").lower()
-    if _matches_env_path(normalized):
+    if _matches_env_path(normalized, bare_suffixes=False):
         return True
     if not normalized or not any(char in normalized for char in "*?["):
         return False
@@ -445,6 +467,21 @@ def _resolve_target(value: str, cwd: str | None) -> str | None:
     return os.path.normcase(_strip_extended_prefix(resolved))
 
 
+@functools.lru_cache(maxsize=1024)
+def _canonical_directory(base: str | None) -> str | None:
+    """Return the resolved, case-normalized directory ``base``.
+
+    Cached because a shell check asks once per word. Each hook call is its own process, so the
+    cache never outlives the filesystem state it describes.
+    """
+    if not base:
+        return None
+    try:
+        return os.path.normcase(os.path.realpath(base))
+    except (OSError, ValueError):
+        return None
+
+
 def _path_for_matching(resolved: str, cwd: str | None) -> str:
     """Return the part of ``resolved`` the name rules should judge.
 
@@ -454,14 +491,13 @@ def _path_for_matching(resolved: str, cwd: str | None) -> str:
     relative path in it, including ordinary source files. Anything under the working directory is
     therefore judged by the part below it; anything outside is judged whole.
     """
-    base = _base_directory(cwd)
-    if not base:
+    base_resolved = _canonical_directory(_base_directory(cwd))
+    if not base_resolved:
         return resolved
 
     try:
-        base_resolved = os.path.normcase(os.path.realpath(base))
         relative = os.path.relpath(resolved, base_resolved)
-    except (OSError, ValueError):
+    except ValueError:
         return resolved
 
     if relative.startswith(os.pardir) or os.path.isabs(relative):
@@ -529,6 +565,41 @@ def _find_resolved_env_target(value: str, cwd: str | None) -> str | None:
     if twin:
         return f"{value} (hard link to {twin})"
 
+    return None
+
+
+def _find_resolved_shell_word(word: str, cwd: str) -> str | None:
+    """Resolve a word from shell text when it names something on disk.
+
+    Most words in a command are not paths, and resolving each one is what makes a large command
+    slow. Only a word that exists, or a path whose parent directory exists (a file about to be
+    created), is resolved; any other word cannot reach a protected file through a link.
+    """
+    text = _strip_stream_suffixes(_strip_extended_prefix(word.strip()))
+    base = _base_directory(cwd)
+    if not text or base is None:
+        return None
+
+    try:
+        path = text if os.path.isabs(text) else os.path.join(base, text)
+        if os.path.lexists(path):
+            return _find_resolved_env_target(word, cwd)
+        if "/" not in text and "\\" not in text:
+            return None
+        # A file about to be created can only be redirected by its directory, and many words
+        # share one directory, so the directory's resolution is cached.
+        directory = os.path.dirname(path)
+        if not os.path.isdir(directory):
+            return None
+        parent = _canonical_directory(directory)
+    except (OSError, ValueError):
+        return None
+
+    if parent is None:
+        return None
+    resolved = os.path.normcase(os.path.join(parent, os.path.basename(path)))
+    if _matches_env_path(_path_for_matching(resolved, cwd)):
+        return f"{word} (resolves to {resolved})"
     return None
 
 
@@ -711,7 +782,8 @@ def _expand_static_shell_variables(command: str) -> str:
 def _has_powershell_encoded_launch(command: str) -> bool:
     """Check launch options before PowerShell's command or file argument."""
     for invocation in POWERSHELL_INVOCATION_RE.finditer(command):
-        arguments = re.split(r"[;&|\r\n]", command[invocation.end() :], maxsplit=1)[0]
+        segment_end = COMMAND_SEGMENT_END_RE.search(command, invocation.end())
+        arguments = command[invocation.end() : segment_end.start() if segment_end else None]
         script_flag = POWERSHELL_SCRIPT_FLAG_RE.search(arguments)
         if script_flag:
             arguments = arguments[: script_flag.start()]
@@ -720,11 +792,42 @@ def _has_powershell_encoded_launch(command: str) -> bool:
     return False
 
 
+def _join_glued_quote(match: re.Match[str]) -> str:
+    text = match.string
+    start, end = match.start(), match.end()
+    content = match.group(1) if match.group(1) is not None else match.group(2)
+    glued = (start > 0 and text[start - 1] not in SHELL_WORD_BREAKS) or (
+        end < len(text) and text[end] not in SHELL_WORD_BREAKS
+    )
+    return content if glued or not content else match.group(0)
+
+
+def _join_shell_words(command: str) -> str:
+    """Return ``command`` with each word spelled the way the shell will receive it.
+
+    Quoted pieces glued into a larger word are joined (``.en""v``, ``po''wershell``), backslash
+    escapes are dropped (``.e\\nv``), and ``{a,b}`` braces are expanded (``{.e,}nv``). A word that
+    is quoted whole keeps its quotes, so ``rg 'iex' src`` still reads as data. Dropping escapes
+    mangles Windows paths, so this form is checked in addition to the original, never instead.
+    """
+    joined = QUOTED_PIECE_RE.sub(_join_glued_quote, command)
+    joined = SHELL_ESCAPE_RE.sub(lambda match: match.group(1) or "", joined)
+    return BRACE_WORD_RE.sub(lambda match: " ".join(_expand_braces(match.group(0))), joined)
+
+
 def _find_env_access_in_command(command: str, cwd: str | None = None) -> str | None:
-    """Block protected names and matching globs wherever they appear in shell text."""
+    """Block protected names and matching globs wherever they appear in shell text.
+
+    Each word is checked by name and, when ``cwd`` is known and the word exists on disk, by where
+    it resolves. A check that would outrun ``SHELL_CHECK_BUDGET_SECONDS`` denies instead.
+    """
+    deadline = time.monotonic() + SHELL_CHECK_BUDGET_SECONDS
     expanded = _expand_static_shell_variables(command).replace("`", "")
-    if OPAQUE_COMMAND_RE.search(expanded) or _has_powershell_encoded_launch(expanded):
-        return "opaque dynamic command"
+    joined = _join_shell_words(expanded)
+    texts = (expanded,) if joined == expanded else (expanded, joined)
+    for text in texts:
+        if OPAQUE_COMMAND_RE.search(text) or _has_powershell_encoded_launch(text):
+            return "opaque dynamic command"
 
     for match in PRINTF_FORMAT_RE.finditer(expanded):
         argument = next(value for value in match.groups()[2:] if value is not None)
@@ -732,12 +835,37 @@ def _find_env_access_in_command(command: str, cwd: str | None = None) -> str | N
         if _matches_env_path_pattern(formatted):
             return formatted
 
+    # Fold ``'a' + 'b'`` one level per pass. ``re.sub`` rebuilds the text, so later matches in
+    # the same pass are never read at offsets from the text before an earlier fold.
+    folded_hits: list[str] = []
+
+    def fold(match: re.Match[str]) -> str:
+        literal = match.group(2) + match.group(4)
+        if not folded_hits and _matches_env_path_pattern(literal):
+            folded_hits.append(literal)
+        return "'" + literal + "'"
+
     for _ in range(4):
-        for match in STRING_CONCAT_RE.finditer(expanded):
-            joined = match.group(2) + match.group(4)
-            if _matches_env_path_pattern(joined):
-                return joined
-            expanded = expanded[: match.start()] + "'" + joined + "'" + expanded[match.end() :]
+        folded = STRING_CONCAT_RE.sub(fold, expanded)
+        if folded_hits:
+            return folded_hits[0]
+        if folded == expanded:
+            break
+        expanded = folded
+
+    seen: set[str] = set()
+
+    def check_word(word: str) -> str | None:
+        if word in seen:
+            return None
+        seen.add(word)
+        if time.monotonic() > deadline:
+            return BUDGET_EXCEEDED
+        if _matches_env_path_pattern(word):
+            return word
+        if cwd and _find_resolved_shell_word(word, cwd):
+            return word
+        return None
 
     for literal in STRING_LITERAL_RE.finditer(expanded):
         escaped = re.sub(
@@ -750,14 +878,15 @@ def _find_env_access_in_command(command: str, cwd: str | None = None) -> str | N
             lambda item: chr(int(item.group(1), 16)),
             escaped,
         )
-        if cwd and _find_resolved_env_target(escaped, cwd):
-            return escaped
-        for part in iter_string_tokens(escaped):
-            if _matches_env_path_pattern(part):
-                return part
+        for word in (escaped, *iter_string_tokens(escaped)):
+            match = check_word(word)
+            if match:
+                return match
 
     if re.search(r"(?i)\b(?:base64|frombase64string)\b", expanded):
         for token in iter_string_tokens(expanded):
+            if time.monotonic() > deadline:
+                return BUDGET_EXCEEDED
             try:
                 decoded = base64.b64decode(token, validate=True)
             except (ValueError, base64.binascii.Error):
@@ -773,21 +902,12 @@ def _find_env_access_in_command(command: str, cwd: str | None = None) -> str | N
                 ):
                     return "encoded protected path"
 
-    for token in iter_string_tokens(expanded):
-        candidate = (
-            token.strip(
-                "(){}",
-            )
-            .split(")", 1)[0]
-            .rstrip(",")
-        )
-        if _matches_env_path_pattern(candidate):
-            return candidate
-        if cwd and _find_resolved_env_target(candidate, cwd):
-            return candidate
+    for text in (expanded, joined):
+        for token in iter_string_tokens(text):
+            match = check_word(token.strip("(){}").split(")", 1)[0].rstrip(","))
+            if match:
+                return match
 
-    if VARIABLE_READER_RE.search(expanded):
-        return "dynamic file path"
     return None
 
 

@@ -284,7 +284,7 @@ def test_shell_protection_does_not_depend_on_a_reader_command_list(
     )
 
 
-@pytest.mark.parametrize("target", ["id_rsa", "private.pem", "credentials.json", "local.env"])
+@pytest.mark.parametrize("target", ["id_rsa", "keys/private.pem", "credentials.json", "local.env"])
 def test_shell_guard_covers_key_and_credential_files(pre_tool_security, target: str) -> None:
     assert pre_tool_security._find_env_access_in_command(f"wc -c {target}") == target
 
@@ -405,7 +405,6 @@ def test_powershell_alternate_script_flags_are_allowed(pre_tool_security, comman
         "iex (Get-Content $path)",
         "Start-Process pwsh -ArgumentList $script",
         "printf LmVudg== | base64 -d",
-        "cmd /c type %secret_file%",
     ],
 )
 def test_obfuscated_protected_path_forms_are_denied(pre_tool_security, command: str) -> None:
@@ -510,3 +509,69 @@ def test_powershell_is_gated_as_a_shell_tool(pre_tool_security, tool_name: str) 
     # than as a direct file target, exactly like Bash.
     assert pre_tool_security._should_check(tool_name) is True
     assert pre_tool_security._should_check_git_paths(tool_name) is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rg {js} src",
+        "grep -rn import.meta.env src",
+        'node -e "console.log({js})"',
+        "cat notes.secret.txt",
+    ],
+)
+def test_bare_words_with_a_protected_suffix_are_not_files(pre_tool_security, command: str) -> None:
+    js = _join_suffix("process", "env")
+    command = command.replace("{js}", js).replace("meta.env", _join_suffix("meta", "env"))
+    assert pre_tool_security._find_env_access_in_command(command) is None
+
+
+def test_protected_suffix_still_applies_to_paths(pre_tool_security) -> None:
+    target = "config/" + _join_suffix("prod", "env")
+    assert pre_tool_security._find_env_access_in_command(f"cat {target}") == target
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python manage.py runserver 0.0.0.0:$PORT",
+        "for f in *.py; do cat $f; done",
+        "npm test -- --grep $NAME",
+        "head -c 100 $LOGFILE",
+        "Get-ChildItem $env:TEMP",
+    ],
+)
+def test_variable_arguments_are_allowed(pre_tool_security, command: str) -> None:
+    assert pre_tool_security._find_env_access_in_command(command) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'cat .en""v',
+        "cat .en''v",
+        r"cat .e\nv",
+        "cat .e\\\nnv",
+        "cat {.e,}nv",
+        "cat {.env,x}",
+        "cat '.e''nv'",
+        "po''wershell -enc SGVsbG8=",
+        '"pow"ershell -ec SGVsbG8=',
+    ],
+)
+def test_shell_quoting_and_braces_do_not_hide_a_name(pre_tool_security, command: str) -> None:
+    command = command.replace(".env", _dot("env"))
+    assert pre_tool_security._find_env_access_in_command(command) is not None, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["rg 'Invoke-Expression' src", 'echo "it works" {a,b}.txt', 'git commit -m "fix: x"'],
+)
+def test_whole_quoted_words_and_plain_braces_are_allowed(pre_tool_security, command: str) -> None:
+    assert pre_tool_security._find_env_access_in_command(command) is None
+
+
+def test_concatenation_after_an_unrelated_join_is_still_folded(pre_tool_security) -> None:
+    command = "Get-Content ('x'+'y'); Get-Content ('.e' + 'n' + 'v')"
+    assert pre_tool_security._find_env_access_in_command(command) == _dot("env")

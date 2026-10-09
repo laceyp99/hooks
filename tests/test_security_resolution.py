@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -671,3 +672,53 @@ def test_git_internals_under_cwd_are_still_denied(project, monkeypatch) -> None:
     payload = _call("Write", {"file_path": f"{GIT}/config"}, project)
 
     assert _decide(payload, monkeypatch) == "deny"
+
+
+# ---------------------------------------------------------------------------
+# Shell words: a bare word with a protected suffix is a file only when it exists, and large
+# commands must finish well inside the 30 s hook timeout, which would otherwise let them through.
+# ---------------------------------------------------------------------------
+
+
+def test_existing_bare_word_with_a_protected_suffix_is_denied(project, monkeypatch) -> None:
+    (project / ("prod" + ENV)).write_text("TOKEN=1\n", encoding="utf-8")
+
+    payload = _call("Bash", {"command": f"cat prod{ENV}"}, project)
+
+    assert _decide(payload, monkeypatch) == "deny"
+
+
+def test_missing_bare_word_with_a_protected_suffix_is_allowed(project, monkeypatch) -> None:
+    payload = _call("Bash", {"command": f"rg process{ENV} src"}, project)
+
+    assert _decide(payload, monkeypatch) is None
+
+
+def test_shell_write_of_a_new_file_through_a_junction_into_direnv_is_denied(
+    project, monkeypatch
+) -> None:
+    _junction(project / "cachedir", project / _dot("direnv"))
+
+    payload = _call("Bash", {"command": "echo x > cachedir/new.txt"}, project)
+
+    assert _decide(payload, monkeypatch) == "deny"
+
+
+def test_shell_check_denies_when_its_time_budget_runs_out(project, monkeypatch) -> None:
+    monkeypatch.setattr(security, "SHELL_CHECK_BUDGET_SECONDS", -1.0)
+
+    result = security._find_env_access_in_command("cat readme.md", str(project))
+
+    assert result == security.BUDGET_EXCEEDED
+
+
+def test_long_words_and_large_heredocs_are_checked_quickly(project) -> None:
+    lines = "\n".join(
+        f"line {i} mentions foo_{i} and src/app{i}.py value={i}" for i in range(10_000)
+    )
+    commands = ["echo " + "a" * 200_000, "cat > out.txt <<'EOF'\n" + lines + "\nEOF"]
+
+    for command in commands:
+        started = time.perf_counter()
+        assert security._find_env_access_in_command(command, str(project)) is None
+        assert time.perf_counter() - started < 8.0

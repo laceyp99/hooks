@@ -93,8 +93,13 @@ How the check applies depends on how the tool names its target:
   ```
 
 Static checks also expand simple literal assignments, string joins, printf escapes, and base64
-arguments. PowerShell `-EncodedCommand`, `Invoke-Expression`/`iex`, and `Start-Process` are denied
+arguments, and read each word the way the shell will: `.en""v`, `.e\nv`, and `{.e,}nv` all count
+as `.env`. PowerShell `-EncodedCommand`, `Invoke-Expression`/`iex`, and `Start-Process` are denied
 because their command text can hide the path from inspection.
+
+Suffix rules such as `*.env` and `*.pem` apply to words with a directory part or files that exist,
+so `rg process.env src` is allowed. A command too large to inspect in about 10 seconds is denied,
+because a hook that times out lets the call through.
 
 ### Git internals
 
